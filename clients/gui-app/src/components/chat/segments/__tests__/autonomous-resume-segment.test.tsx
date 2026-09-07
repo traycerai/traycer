@@ -185,6 +185,47 @@ describe("<AutonomousResumeSegment />", () => {
     expect(screen.getByText("Output truncated")).toBeTruthy();
   });
 
+  it("renders only the output path for a .pdf output file, without fetching it", () => {
+    render(
+      <AutonomousResumeSegment
+        triggers={[
+          {
+            kind: "command",
+            title: "generate report",
+            status: "completed",
+            summary: "Command finished",
+            blockId: "tool-3",
+            outputFile: {
+              workspacePath: "/tmp/traycer-output",
+              filePath: "/tmp/traycer-output/report.pdf",
+            },
+            mcp: null,
+            managedCommand: null,
+            live: false,
+          },
+        ]}
+      />,
+    );
+
+    const commandButton = screen.getByRole("button", {
+      name: /Command completed/,
+    });
+    fireEvent.click(commandButton);
+
+    expect(screen.getByText("/tmp/traycer-output/report.pdf")).toBeTruthy();
+    // No "open it from the file tree" instruction - the output folder is
+    // often outside every bound root.
+    expect(screen.queryByText(/file tree/)).toBeNull();
+    // The query hook is still called (unconditional hook call), but never
+    // enabled - a PDF output is never fetched through the text pipeline.
+    expect(
+      hostQueryMock.calls.some(
+        (call) =>
+          call.method === "workspace.readFile" && call.options.enabled === true,
+      ),
+    ).toBe(false);
+  });
+
   it("renders command triggers without output files as non-expandable cards", () => {
     render(
       <AutonomousResumeSegment

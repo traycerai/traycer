@@ -242,7 +242,7 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
 
-  // ── Static zustand stores (29) ───────────────────────────────────────────
+  // ── Static zustand stores (30) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
@@ -342,6 +342,14 @@ export const PERSIST_STORES = [
   {
     camelName: "notificationsFilter",
     leaf: "notifications-filter",
+    kind: "static",
+  },
+  // Which feature announcements this install has shown, keyed by feature id
+  // (`feature-announcements-store.ts`). Machine-local like onboarding: it is
+  // a fact about what this install has said, not about who is signed in.
+  {
+    camelName: "featureAnnouncements",
+    leaf: "feature-announcements",
     kind: "static",
   },
 

@@ -1,83 +1,49 @@
-import { useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { ArrowRightIcon, SearchIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import { Switch } from "@/components/ui/switch";
+import { ImportLoginsDialog } from "@/components/settings/import-logins-dialog";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import {
   useBrowserSaveLogins,
   type BrowserSaveLoginsController,
 } from "@/lib/browser-view/use-browser-save-logins";
-import {
-  clearSavedLoginSite,
-  forgetAllBrowserLogins,
-} from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { useBrowserSavedLoginSitesQuery } from "@/hooks/browser/use-browser-saved-login-sites-query";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useHostBinding } from "@/lib/host";
-import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { appLogger } from "@/lib/logger";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserSavedLoginSite,
   BrowserSavedLoginSitesResponse,
 } from "@traycer/protocol/host/browser/contracts";
-import {
-  isAgentTabSurfacingMode,
-  isBrowserLinkDefaultMode,
-  isBrowserLinkOpenMode,
-  useSettingsStore,
-  type AgentTabSurfacingMode,
-  type BrowserLinkDefaultMode,
-  type BrowserLinkOpenMode,
-} from "@/stores/settings/settings-store";
-
-const BROWSER_LINK_DEFAULT_MODE_LABELS: Record<BrowserLinkDefaultMode, string> =
-  {
-    "in-app": "In app",
-    external: "External",
-    "per-kind": "Per kind",
-  };
-const BROWSER_LINK_OPEN_MODE_LABELS: Record<BrowserLinkOpenMode, string> = {
-  "in-app": "In app",
-  external: "External",
-};
-const AGENT_TAB_SURFACING_LABELS: Record<AgentTabSurfacingMode, string> = {
-  pip: "Float (PiP)",
-  tile: "Tile in canvas",
-  off: "Off (background only)",
-};
+import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export function BrowserSettingsSection(): ReactNode {
-  const browserLinkDefaultMode = useSettingsStore(
-    (s) => s.browserLinkDefaultMode,
-  );
-  const setBrowserLinkDefaultMode = useSettingsStore(
-    (s) => s.setBrowserLinkDefaultMode,
-  );
-  const terminalBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.terminalBrowserLinkOpenMode,
-  );
-  const setTerminalBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.setTerminalBrowserLinkOpenMode,
-  );
-  const markdownBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.markdownBrowserLinkOpenMode,
-  );
-  const setMarkdownBrowserLinkOpenMode = useSettingsStore(
-    (s) => s.setMarkdownBrowserLinkOpenMode,
-  );
-  const agentTabSurfacingMode = useSettingsStore(
-    (s) => s.agentTabSurfacingMode,
-  );
-  const setAgentTabSurfacingMode = useSettingsStore(
-    (s) => s.setAgentTabSurfacingMode,
-  );
   const browserDevOrigins = useSettingsStore((s) => s.browserDevOrigins);
   const removeBrowserDevOrigin = useSettingsStore(
     (s) => s.removeBrowserDevOrigin,
@@ -85,73 +51,16 @@ export function BrowserSettingsSection(): ReactNode {
 
   return (
     <>
-      <SettingsGroup
-        title="Browser"
-        tone="default"
-        dataTestId={undefined}
-        fill={false}
-      >
-        <SettingsRow
-          label="Web link default"
-          description="Choose where http and https links open."
-          control={
-            <EnumSelect
-              labels={BROWSER_LINK_DEFAULT_MODE_LABELS}
-              isValue={isBrowserLinkDefaultMode}
-              value={browserLinkDefaultMode}
-              onValueChange={setBrowserLinkDefaultMode}
-              ariaLabel="Web link default"
-              triggerClassName="w-[min(42vw,11rem)]"
-            />
-          }
-        />
-        {browserLinkDefaultMode === "per-kind" ? (
-          <>
-            <SettingsRow
-              label="Terminal links"
-              description="Applies to plain terminal URLs and OSC-8 hyperlinks."
-              control={
-                <EnumSelect
-                  labels={BROWSER_LINK_OPEN_MODE_LABELS}
-                  isValue={isBrowserLinkOpenMode}
-                  value={terminalBrowserLinkOpenMode}
-                  onValueChange={setTerminalBrowserLinkOpenMode}
-                  ariaLabel="Link open mode"
-                  triggerClassName="w-[min(42vw,10rem)]"
-                />
-              }
-            />
-            <SettingsRow
-              label="Markdown links"
-              description="Applies to rendered markdown http and https anchors."
-              control={
-                <EnumSelect
-                  labels={BROWSER_LINK_OPEN_MODE_LABELS}
-                  isValue={isBrowserLinkOpenMode}
-                  value={markdownBrowserLinkOpenMode}
-                  onValueChange={setMarkdownBrowserLinkOpenMode}
-                  ariaLabel="Link open mode"
-                  triggerClassName="w-[min(42vw,10rem)]"
-                />
-              }
-            />
-          </>
-        ) : null}
-        <SettingsRow
-          label="Agent tab surfacing"
-          description="Choose what happens on your canvas when the agent opens a browser tab: float it picture-in-picture, place a tile, or keep it in the background (sidebar only)."
-          control={
-            <EnumSelect
-              labels={AGENT_TAB_SURFACING_LABELS}
-              isValue={isAgentTabSurfacingMode}
-              value={agentTabSurfacingMode}
-              onValueChange={setAgentTabSurfacingMode}
-              ariaLabel="Agent tab surfacing"
-              triggerClassName="w-[min(42vw,11rem)]"
-            />
-          }
-        />
-        {browserDevOrigins.length > 0 ? (
+      {/* The whole group is conditional now, not just its row: link and agent
+          controls moved to Settings > Opening behavior, so with no detected
+          origins the card would be a heading over an empty box. */}
+      {browserDevOrigins.length > 0 ? (
+        <SettingsGroup
+          title="Browser"
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
           <SettingsRow
             label="Detected dev origins"
             description="Terminal URLs with local hosts or explicit ports are kept for browser-origin classification."
@@ -162,52 +71,10 @@ export function BrowserSettingsSection(): ReactNode {
               />
             }
           />
-        ) : null}
-      </SettingsGroup>
+        </SettingsGroup>
+      ) : null}
       <BrowserSavedLoginsGroup />
     </>
-  );
-}
-
-/**
- * One `Select` over a string-union setting: the labels record supplies both
- * the options and their order, and the union's own store guard narrows what
- * Radix hands back.
- */
-function EnumSelect<T extends string>(props: {
-  /**
-   * Options and their order. Each caller declares its own constant as
-   * `Record<Union, string>`, so member coverage is checked there.
-   */
-  readonly labels: Readonly<Record<string, string>>;
-  readonly value: T;
-  readonly isValue: (value: string) => value is T;
-  readonly onValueChange: (value: T) => void;
-  readonly ariaLabel: string;
-  readonly triggerClassName: string;
-}): ReactNode {
-  return (
-    <Select
-      value={props.value}
-      onValueChange={(value) => {
-        if (props.isValue(value)) props.onValueChange(value);
-      }}
-    >
-      <SelectTrigger
-        aria-label={props.ariaLabel}
-        className={props.triggerClassName}
-        size="sm"
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {Object.entries(props.labels).map(([value, label]) => (
-          <SelectItem key={value} value={value}>
-            {label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
   );
 }
 
@@ -273,7 +140,13 @@ function BrowserSavedLoginsGroup(): ReactNode {
   if (browserView === null || hostBinding === null || enabled === null) {
     return null;
   }
-  return <BrowserSavedLoginsRows saveLogins={saveLogins} enabled={enabled} />;
+  return (
+    <BrowserSavedLoginsRows
+      browserView={browserView}
+      saveLogins={saveLogins}
+      enabled={enabled}
+    />
+  );
 }
 
 /**
@@ -282,31 +155,69 @@ function BrowserSavedLoginsGroup(): ReactNode {
  * called conditionally.
  */
 function BrowserSavedLoginsRows(props: {
+  readonly browserView: BrowserViewBridge;
   readonly saveLogins: BrowserSaveLoginsController;
   readonly enabled: boolean;
 }): ReactNode {
-  // Unconditionally enabled here: this only mounts once the machine has
-  // answered the pref, which is what the gate stood for.
   const sites = useBrowserSavedLoginSitesQuery({ enabled: true });
+  const importTriggerRef = useRef<HTMLButtonElement>(null);
+  const [importOpened, setImportOpened] = useState(false);
+  const requested = useBrowserFocusStore((state) => state.openImportLogins);
+  const consumeImportLogins = useBrowserFocusStore(
+    (state) => state.consumeImportLogins,
+  );
+  const enabled = props.enabled;
+  useEffect(() => {
+    if (requested && !enabled) consumeImportLogins();
+  }, [consumeImportLogins, enabled, requested]);
+  const importOpen = importOpened || (requested && enabled);
+  const setImportOpen = (next: boolean): void => {
+    setImportOpened(next);
+    if (!next && requested) consumeImportLogins();
+  };
+
   return (
-    <SettingsGroup
-      title="Saved logins"
-      tone="default"
-      dataTestId="settings-saved-logins"
-      fill={false}
-    >
-      <SavedLoginsToggleRow
-        saveLogins={props.saveLogins}
-        enabled={props.enabled}
-      />
-      <ForgetAllLoginsRow />
-      <SavedLoginSitesRow
-        data={sites.data ?? null}
-        onCleared={() => {
-          void sites.refetch();
-        }}
-      />
-    </SettingsGroup>
+    <>
+      <SettingsGroup
+        title="Website sessions"
+        tone="default"
+        dataTestId="settings-saved-logins"
+        fill={false}
+      >
+        <SavedLoginsToggleRow
+          saveLogins={props.saveLogins}
+          enabled={props.enabled}
+        />
+        <SavedWebsiteSessionsRow
+          browserView={props.browserView}
+          data={sites.data ?? null}
+          loading={sites.isLoading}
+          failed={sites.isError}
+          enabled={props.enabled}
+          importTriggerRef={importTriggerRef}
+          onImport={() => {
+            setImportOpen(true);
+          }}
+          onRefresh={() => {
+            void sites.refetch();
+          }}
+        />
+        <ImportLoginsRow
+          enabled={props.enabled}
+          triggerRef={importTriggerRef}
+          onOpen={() => {
+            setImportOpen(true);
+          }}
+        />
+      </SettingsGroup>
+      {importOpen ? (
+        <ImportLoginsDialog
+          open={importOpen}
+          onOpenChange={setImportOpen}
+          browserView={props.browserView}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -324,13 +235,17 @@ function SavedLoginsToggleRow(props: {
   return (
     <>
       <SettingsRow
-        label="Save website logins on this machine"
-        description="Traycer keeps cookies and logins on this machine so agents can reuse the sites you're signed into. Turning this off reloads open browser tabs signed out; the logins already saved stay until you forget them."
+        label="Save website sessions on this computer"
+        description={
+          props.enabled
+            ? "Keep session data from Traycer browser tabs so sites can stay signed in."
+            : "Saving is paused on this computer. Existing sessions stay available to manage."
+        }
         control={
           <Switch
             checked={props.enabled}
             disabled={props.saveLogins.pending}
-            aria-label="Save website logins"
+            aria-label="Save website sessions on this computer"
             onCheckedChange={(next) => {
               if (next) {
                 props.saveLogins.setEnabled(true);
@@ -344,11 +259,12 @@ function SavedLoginsToggleRow(props: {
       <ConfirmDestructiveDialog
         open={confirming}
         onOpenChange={setConfirming}
-        title="Stop saving website logins?"
-        description="Open browser tabs reload signed out and nothing new is saved on this machine. The logins already saved are kept - use Forget all browser logins to delete them."
+        title="Stop saving website sessions?"
+        description="Open browser tabs reload signed out, and this computer stops saving new session data. Existing sessions stay available until you remove them."
         cascadeSummary={null}
         actionLabel="Stop saving"
         isPending={props.saveLogins.pending}
+        blockedReason={null}
         onConfirm={() => {
           props.saveLogins.setEnabled(false);
           setConfirming(false);
@@ -358,155 +274,483 @@ function SavedLoginsToggleRow(props: {
   );
 }
 
-/**
- * The destructive one, moved here from the tile shield (ticket 08's temporary
- * home). It speaks for every host the user has a live browser stream to, which
- * is what "all" means and why it is not tile-scoped - and when there is no such
- * stream the frame reaches nobody, so the confirm stays open instead of closing
- * on work that never happened.
- */
-function ForgetAllLoginsRow(): ReactNode {
-  const [confirming, setConfirming] = useState(false);
-  return (
-    <>
-      <SettingsRow
-        label="Forget all browser logins"
-        description="Deletes every saved cookie and login - on this machine and on the host that stores them. Open browser tabs reload signed out and agent sessions using them are suspended."
-        control={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="text-destructive hover:text-destructive"
-            onClick={() => {
-              setConfirming(true);
-            }}
-          >
-            Forget all browser logins…
-          </Button>
-        }
-      />
-      <ConfirmDestructiveDialog
-        open={confirming}
-        onOpenChange={setConfirming}
-        title="Forget all browser logins?"
-        description="Traycer deletes every saved cookie and login - on this machine and on the host that stores them. Open browser tabs reload signed out, and agent sessions using them are suspended. This cannot be undone."
-        cascadeSummary={null}
-        actionLabel="Forget logins"
-        isPending={false}
-        onConfirm={() => {
-          // Same refusal as the per-site Clear: with no live browser stream
-          // nothing went out, so the dialog stays where it is rather than
-          // closing on a promise the app did not keep.
-          if (!forgetAllBrowserLogins()) return;
-          setConfirming(false);
-        }}
-      />
-    </>
-  );
-}
-
-/**
- * Which sites the host still holds logins for - names and times only, never a
- * value (spec section 7.3). `sealed` is deliberately not rendered as "none":
- * the logins exist, this host just cannot open them until the desktop that
- * wrapped its key connects.
- *
- * `null` data means the host never answered - it predates the method, or the
- * query has not settled - and the row renders nothing at all rather than
- * claiming an empty jar.
- */
-function SavedLoginSitesRow(props: {
-  readonly data: BrowserSavedLoginSitesResponse | null;
-  readonly onCleared: () => void;
+function ImportLoginsRow(props: {
+  readonly enabled: boolean;
+  readonly triggerRef: RefObject<HTMLButtonElement | null>;
+  readonly onOpen: () => void;
 }): ReactNode {
-  // Optimistic, and only for a frame that actually went out: the host merges
-  // asynchronously, so the refetch right behind a clear can still read the
-  // pre-merge slice and put the row back for a beat.
-  const [cleared, setCleared] = useState<readonly string[]>([]);
-  const data = props.data;
-  if (data === null) return null;
-  const sites = data.kind === "sealed" ? [] : data.sites;
-  // The optimism releases itself. A domain is hidden only while the LATEST
-  // answer still names it: once the merge lands and the row leaves the
-  // response, it leaves this list too - so signing back into that site while
-  // Settings is open shows it again instead of hiding it for the rest of the
-  // session.
-  //
-  // Retired from state during render (React's documented way to sync state off
-  // a changing external value) rather than in an Effect, because the entry has
-  // to be gone BEFORE a later response can re-introduce that domain - deriving
-  // alone would hide the re-login too.
-  const activeCleared = cleared.filter((domain) =>
-    sites.some((site) => site.domain === domain),
-  );
-  if (activeCleared.length !== cleared.length) setCleared(activeCleared);
+  const { enabled, triggerRef, onOpen } = props;
   return (
     <SettingsRow
-      label="Sites with saved logins"
-      description="Site names only - Traycer never shows the saved values."
+      label="Bring in existing sessions"
+      description="Choose a browser or cookie file, then review the sites before importing."
+      hint={enabled ? null : "Turn on Save website sessions first."}
       control={
-        <div className="flex w-full min-w-0 max-w-[min(48vw,26rem)] flex-col gap-1.5 text-ui-sm">
-          {data.kind === "sealed" ? (
-            <p className="text-muted-foreground">
-              Connect this desktop to unlock saved logins.
-            </p>
-          ) : (
-            <SavedLoginSiteList
-              sites={sites.filter(
-                (site) => !activeCleared.includes(site.domain),
-              )}
-              onClear={(domain) => {
-                if (!clearSavedLoginSite(domain)) return;
-                // The pruned list, not the raw one: a domain the host has
-                // since dropped never comes back into it.
-                setCleared([...activeCleared, domain]);
-                props.onCleared();
-              }}
-            />
-          )}
-        </div>
+        <Button
+          ref={triggerRef}
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!enabled}
+          onClick={onOpen}
+        >
+          Choose source…
+        </Button>
       }
     />
   );
 }
 
-function SavedLoginSiteList(props: {
-  readonly sites: readonly BrowserSavedLoginSite[];
-  readonly onClear: (domain: string) => void;
+/**
+ * Both destructive actions are main's: it raises the native dialog, does the
+ * work, and answers whether the user confirmed. This renderer only reports
+ * that answer, so a rejected IPC has to read as "not confirmed" rather than
+ * escape a click handler as an unhandled rejection.
+ */
+async function confirmedByMain(
+  request: Promise<boolean>,
+  failureMessage: string,
+): Promise<boolean> {
+  return request.catch((cause: unknown) => {
+    appLogger.warn(failureMessage, {
+      cause: cause instanceof Error ? cause.message : String(cause),
+    });
+    return false;
+  });
+}
+
+const SAVED_WEBSITE_SESSIONS_DESCRIPTION =
+  "Shared with connected Traycer hosts. Removing a site may sign you out there.";
+
+function siteCountLabel(count: number): string {
+  return `${count} ${count === 1 ? "site" : "sites"}`;
+}
+
+function SavedWebsiteSessionsRow(props: {
+  readonly browserView: BrowserViewBridge;
+  readonly data: BrowserSavedLoginSitesResponse | null;
+  readonly loading: boolean;
+  readonly failed: boolean;
+  readonly enabled: boolean;
+  readonly importTriggerRef: RefObject<HTMLButtonElement | null>;
+  readonly onImport: () => void;
+  readonly onRefresh: () => void;
 }): ReactNode {
-  // The shared 60s clock, not `Date.now()`: reading the wall clock during a
-  // render is impure, and the sampled one repaints these labels on its tick.
-  const now = useSampledNow();
-  if (props.sites.length === 0) {
-    return <p className="text-muted-foreground">No saved logins yet.</p>;
+  const [cleared, setCleared] = useState<readonly string[]>([]);
+  const data = props.data;
+  const sites = data?.kind === "sites" ? data.sites : [];
+  const activeCleared = cleared.filter((domain) =>
+    sites.some((site) => site.domain === domain),
+  );
+  if (activeCleared.length !== cleared.length) setCleared(activeCleared);
+
+  const removeAll = async (): Promise<boolean> => {
+    const confirmed = await confirmedByMain(
+      props.browserView.forgetLogins(),
+      "[browser] clearing the browser partition failed",
+    );
+    if (!confirmed) return false;
+    setCleared((current) => [
+      ...new Set([...current, ...sites.map((site) => site.domain)]),
+    ]);
+    props.onRefresh();
+    return true;
+  };
+
+  if (data === null) {
+    if (props.loading) {
+      return (
+        <SavedWebsiteSessionsState
+          status="Loading…"
+          message={null}
+          onRetry={null}
+          onRemoveAll={null}
+        />
+      );
+    }
+    if (props.failed) {
+      return (
+        <SavedWebsiteSessionsState
+          status="Unavailable"
+          message="Unable to load saved website sessions. Check the host connection and try again."
+          onRetry={props.onRefresh}
+          onRemoveAll={null}
+        />
+      );
+    }
+    return (
+      <SavedWebsiteSessionsState
+        status="Unavailable"
+        message="Update the connected Traycer host to view and manage saved website sessions."
+        onRetry={null}
+        onRemoveAll={null}
+      />
+    );
   }
+  if (data.kind === "sealed") {
+    return (
+      <SavedWebsiteSessionsState
+        status="Locked"
+        message="Connect this desktop to unlock saved website sessions. If this computer has no system keyring, Traycer cannot encrypt them here, so they stay locked and nothing new is saved."
+        onRetry={null}
+        onRemoveAll={removeAll}
+      />
+    );
+  }
+
+  const alphabeticalSites = sites
+    .filter((site) => !activeCleared.includes(site.domain))
+    .sort((first, second) => first.domain.localeCompare(second.domain));
+
+  const removeSite = async (domain: string): Promise<boolean> => {
+    const confirmed = await confirmedByMain(
+      props.browserView.clearSavedLoginSite(domain),
+      "[browser] clearing one saved login failed",
+    );
+    if (!confirmed) return false;
+    setCleared((current) =>
+      current.includes(domain) ? current : [...current, domain],
+    );
+    props.onRefresh();
+    return true;
+  };
+
   return (
-    <ul className="flex w-full min-w-0 flex-col gap-1">
-      {props.sites.map((site) => (
-        <li
-          key={site.domain}
-          className="flex min-w-0 items-center gap-2 text-ui-sm"
-        >
-          <span className="min-w-0 flex-1 truncate font-mono text-foreground">
-            {site.domain}
+    <SavedWebsiteSessionsManager
+      sites={alphabeticalSites}
+      enabled={props.enabled}
+      importTriggerRef={props.importTriggerRef}
+      onImport={props.onImport}
+      onRemove={removeSite}
+      onRemoveAll={removeAll}
+    />
+  );
+}
+
+function SavedWebsiteSessionsState(props: {
+  readonly status: string;
+  readonly message: string | null;
+  readonly onRetry: (() => void) | null;
+  readonly onRemoveAll: (() => Promise<boolean>) | null;
+}): ReactNode {
+  return (
+    <div className="border-b border-border/40">
+      <SettingsRow
+        label="Saved website sessions"
+        description={SAVED_WEBSITE_SESSIONS_DESCRIPTION}
+        control={
+          <span className="text-ui-sm text-muted-foreground" role="status">
+            {props.status}
           </span>
-          <span className="shrink-0 text-muted-foreground">
-            {formatRelativeTimestamp(site.lastSeen, now)}
-          </span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            aria-label={`Clear saved logins for ${site.domain}`}
-            onClick={() => {
-              props.onClear(site.domain);
-            }}
+        }
+      />
+      {props.message === null ? null : (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-ui-sm text-muted-foreground">
+          <p className="max-w-[72ch] text-pretty">{props.message}</p>
+          {props.onRetry === null ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={props.onRetry}
+            >
+              Try again
+            </Button>
+          )}
+          {props.onRemoveAll === null ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              onClick={() => {
+                void props.onRemoveAll?.();
+              }}
+            >
+              Remove all…
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SavedWebsiteSessionsManager(props: {
+  readonly sites: readonly BrowserSavedLoginSite[];
+  readonly enabled: boolean;
+  readonly importTriggerRef: RefObject<HTMLButtonElement | null>;
+  readonly onImport: () => void;
+  readonly onRemove: (domain: string) => Promise<boolean>;
+  readonly onRemoveAll: () => Promise<boolean>;
+}): ReactNode {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("");
+  const searchId = useId();
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const emptyImportRef = useRef<HTMLButtonElement>(null);
+  const localHostId = useReactiveLocalHostId();
+  const preview = props.sites.slice(0, 3);
+  const hiddenCount = props.sites.length - preview.length;
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const matches = props.sites.filter((site) =>
+    site.domain.toLocaleLowerCase().includes(normalizedQuery),
+  );
+  const disclosureLabel =
+    hiddenCount > 0
+      ? `View all ${hiddenCount} more sites`
+      : `Manage all ${siteCountLabel(props.sites.length)}`;
+
+  const changeOpen = (next: boolean): void => {
+    setOpen(next);
+    if (next) return;
+    setQuery("");
+    setStatus("");
+  };
+
+  return (
+    <Sheet open={open} onOpenChange={changeOpen}>
+      <div className="border-b border-border/40">
+        <SettingsRow
+          label="Saved website sessions"
+          description={SAVED_WEBSITE_SESSIONS_DESCRIPTION}
+          control={
+            <span className="tabular-nums text-ui-sm text-muted-foreground">
+              {siteCountLabel(props.sites.length)}
+            </span>
+          }
+        />
+        {preview.length === 0 ? null : (
+          <>
+            <ul aria-label="First three saved sites">
+              {preview.map((site) => (
+                <li
+                  key={site.domain}
+                  className="flex min-w-0 border-b border-border/40 px-5 py-2.5 last:border-b-0"
+                >
+                  <SavedWebsiteSessionDetails
+                    site={site}
+                    localHostId={localHostId}
+                  />
+                </li>
+              ))}
+            </ul>
+            <SheetTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-auto w-full justify-between rounded-none border-t border-border/40 px-5 py-3 text-start text-muted-foreground"
+              >
+                {disclosureLabel}
+                <ArrowRightIcon aria-hidden="true" />
+              </Button>
+            </SheetTrigger>
+          </>
+        )}
+      </div>
+      <SheetContent
+        side="right"
+        className="gap-0 overflow-hidden data-[side=right]:w-full data-[side=right]:sm:max-w-xl"
+        onCloseAutoFocus={(event) => {
+          if (props.sites.length > 0) return;
+          const fallback = props.importTriggerRef.current;
+          if (fallback === null || fallback.disabled) return;
+          event.preventDefault();
+          fallback.focus();
+        }}
+      >
+        <SheetHeader className="shrink-0 pe-12">
+          <SheetTitle>Saved website sessions</SheetTitle>
+          <SheetDescription>
+            Search and remove website sessions without losing your place in
+            General settings.
+          </SheetDescription>
+        </SheetHeader>
+        <p className="mx-4 mb-4 rounded-md bg-foreground/8 px-3 py-2 text-ui-sm text-muted-foreground">
+          Shared collection · Removing a site may sign you out on connected
+          Traycer hosts.
+        </p>
+        <div className="shrink-0 space-y-2 px-4 pb-4">
+          <Label htmlFor={searchId}>Search saved sites</Label>
+          <div className="relative">
+            <SearchIcon
+              aria-hidden="true"
+              className="pointer-events-none absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              ref={searchInputRef}
+              id={searchId}
+              name="saved-website-session-search"
+              type="search"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="example.com"
+              className="ps-8"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.currentTarget.value);
+              }}
+            />
+          </div>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col border-y border-border/60">
+          <div className="flex shrink-0 items-center justify-between gap-3 px-4 py-2 text-ui-xs text-muted-foreground">
+            <span className="tabular-nums" role="status" aria-live="polite">
+              {normalizedQuery.length > 0
+                ? `${matches.length} of ${siteCountLabel(props.sites.length)}`
+                : siteCountLabel(props.sites.length)}
+            </span>
+            <span>A–Z</span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            {matches.length > 0 ? (
+              <ul aria-label="Saved website sessions" className="px-2 pb-2">
+                {matches.map((site) => (
+                  <li
+                    key={site.domain}
+                    className="flex min-w-0 items-center gap-4 border-t border-border/40 px-2 py-2 first:border-t-0"
+                  >
+                    <SavedWebsiteSessionDetails
+                      site={site}
+                      localHostId={localHostId}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="text-muted-foreground hover:text-destructive"
+                      aria-label={`Remove saved website session for ${site.domain}`}
+                      onClick={() => {
+                        void props.onRemove(site.domain).then((removed) => {
+                          if (!removed) return;
+                          setStatus("Website session removed.");
+                          requestAnimationFrame(() => {
+                            searchInputRef.current?.focus();
+                          });
+                        });
+                      }}
+                    >
+                      Remove
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {matches.length === 0 && props.sites.length === 0 ? (
+              <div className="grid min-h-full place-items-center px-6 py-8 text-center">
+                <div className="max-w-[46ch]">
+                  <h3 className="font-medium text-foreground">
+                    No saved website sessions
+                  </h3>
+                  <p className="mt-1 text-pretty text-ui-sm text-muted-foreground">
+                    {props.enabled
+                      ? "Bring in sessions from another browser, or save new ones as you browse."
+                      : "Turn on Save website sessions to import. Existing sessions will remain available when saving resumes."}
+                  </p>
+                  <Button
+                    ref={emptyImportRef}
+                    type="button"
+                    variant="outline"
+                    className="mt-4"
+                    disabled={!props.enabled}
+                    onClick={() => {
+                      changeOpen(false);
+                      requestAnimationFrame(props.onImport);
+                    }}
+                  >
+                    Choose source…
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+            {matches.length === 0 && props.sites.length > 0 ? (
+              <div className="grid min-h-full place-items-center px-6 py-8 text-center">
+                <div className="max-w-[46ch]">
+                  <h3 className="font-medium text-foreground">
+                    No matching sites
+                  </h3>
+                  <p className="mt-1 text-ui-sm text-muted-foreground">
+                    No sites match your search.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="mt-4"
+                    onClick={() => {
+                      setQuery("");
+                      searchInputRef.current?.focus();
+                    }}
+                  >
+                    Clear search
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <SheetFooter className="shrink-0 border-t border-border/60 pb-safe-bottom-gutter sm:flex-row sm:items-center sm:justify-between">
+          <span
+            className="min-h-4 min-w-0 truncate text-ui-xs text-muted-foreground"
+            role="status"
+            aria-live="polite"
           >
-            Clear
-          </Button>
-        </li>
-      ))}
-    </ul>
+            {status}
+          </span>
+          <div className="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-end">
+            <Button
+              type="button"
+              variant="ghost"
+              className="text-destructive hover:text-destructive"
+              disabled={props.sites.length === 0}
+              onClick={() => {
+                void props.onRemoveAll().then((removed) => {
+                  if (!removed) return;
+                  setStatus("All website sessions removed.");
+                  requestAnimationFrame(() => {
+                    emptyImportRef.current?.focus();
+                  });
+                });
+              }}
+            >
+              Remove all…
+            </Button>
+            <SheetClose asChild>
+              <Button type="button">Done</Button>
+            </SheetClose>
+          </div>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function SavedWebsiteSessionDetails(props: {
+  readonly site: BrowserSavedLoginSite;
+  readonly localHostId: string | null;
+}): ReactNode {
+  const contributedByHostId = props.site.contributedByHostId;
+  const remoteHostId =
+    typeof contributedByHostId === "string" &&
+    contributedByHostId !== props.localHostId
+      ? contributedByHostId
+      : null;
+  const entry = useHostDirectoryEntry(remoteHostId);
+  const hostName = entry === null ? remoteHostId : entry.label;
+
+  return (
+    <div className="min-w-0 flex-1">
+      <span
+        className="block min-w-0 break-all font-mono text-ui-sm text-foreground"
+        translate="no"
+      >
+        {props.site.domain}
+      </span>
+      {hostName === null ? null : (
+        <span className="block min-w-0 truncate text-ui-xs text-muted-foreground">
+          Includes a sign-in from {hostName}
+        </span>
+      )}
+    </div>
   );
 }

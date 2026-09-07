@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions/open-into-target";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
+import type { PaneTileOpenOptions } from "@/lib/canvas/tile-open/intent";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -25,7 +26,14 @@ function resetCanvasStore(): void {
 
 function installOpenTileInGroupMock() {
   const mock =
-    vi.fn<(tabId: string, groupId: string, ref: EpicCanvasTileRef) => void>();
+    vi.fn<
+      (
+        tabId: string,
+        groupId: string,
+        ref: EpicCanvasTileRef,
+        options: PaneTileOpenOptions,
+      ) => void
+    >();
   useEpicCanvasStore.setState({ openTileInPane: mock });
   return mock;
 }
@@ -92,9 +100,14 @@ describe("openTileIntoTargetGroup", () => {
       tabId: "tab-1",
       groupId: "group-1",
       ref: REF,
+      dedupe: false,
       navigateNestedFocus: undefined,
     });
-    expect(mock).toHaveBeenCalledWith("tab-1", "group-1", REF);
+    expect(mock).toHaveBeenCalledWith("tab-1", "group-1", REF, {
+      mode: "permanent",
+      index: null,
+      source: "command_palette",
+    });
   });
 
   it("no-ops when the tab id is missing", () => {
@@ -103,6 +116,7 @@ describe("openTileIntoTargetGroup", () => {
       tabId: null,
       groupId: "group-1",
       ref: REF,
+      dedupe: false,
       navigateNestedFocus: undefined,
     });
     expect(mock).not.toHaveBeenCalled();
@@ -114,6 +128,7 @@ describe("openTileIntoTargetGroup", () => {
       tabId: "tab-1",
       groupId: null,
       ref: REF,
+      dedupe: false,
       navigateNestedFocus: undefined,
     });
     expect(mock).not.toHaveBeenCalled();
@@ -127,6 +142,7 @@ describe("openTileIntoTargetGroup", () => {
       tabId,
       groupId: targetGroupId,
       ref: REF,
+      dedupe: false,
       navigateNestedFocus: navigation.navigateNestedFocus,
     });
 
@@ -156,10 +172,63 @@ describe("openTileIntoTargetGroup", () => {
       tabId,
       groupId: targetGroupId,
       ref: REF,
+      dedupe: false,
       navigateNestedFocus: undefined,
     });
 
-    expect(mock).toHaveBeenCalledWith(tabId, targetGroupId, REF);
+    expect(mock).toHaveBeenCalledWith(tabId, targetGroupId, REF, {
+      mode: "permanent",
+      index: null,
+      source: "command_palette",
+    });
+  });
+
+  it("focuses the open instance with dedupe on, and mints a second view with it off", () => {
+    const deduped = seedTabWithEmptyTargetGroup();
+    const navigation = nestedFocusRecorder();
+    for (const _pass of [0, 1]) {
+      openTileIntoTargetGroup({
+        tabId: deduped.tabId,
+        groupId: deduped.targetGroupId,
+        ref: REF,
+        // A singleton (the comm graph) keys per-tile state on its content id,
+        // so a second view would have both tabs writing it.
+        dedupe: true,
+        navigateNestedFocus: navigation.navigateNestedFocus,
+      });
+    }
+    const dedupedCanvas =
+      useEpicCanvasStore.getState().canvasByTabId[deduped.tabId];
+    const dedupedPane =
+      dedupedCanvas === undefined
+        ? null
+        : findPaneById(dedupedCanvas.root, deduped.targetGroupId);
+    if (dedupedCanvas === undefined || dedupedPane === null) {
+      throw new Error("expected a resolvable target pane");
+    }
+    expect(paneTabRefs(dedupedCanvas, dedupedPane)).toHaveLength(1);
+
+    resetCanvasStore();
+    const fresh = seedTabWithEmptyTargetGroup();
+    for (const _pass of [0, 1]) {
+      openTileIntoTargetGroup({
+        tabId: fresh.tabId,
+        groupId: fresh.targetGroupId,
+        ref: REF,
+        dedupe: false,
+        navigateNestedFocus: navigation.navigateNestedFocus,
+      });
+    }
+    const freshCanvas =
+      useEpicCanvasStore.getState().canvasByTabId[fresh.tabId];
+    const freshPane =
+      freshCanvas === undefined
+        ? null
+        : findPaneById(freshCanvas.root, fresh.targetGroupId);
+    if (freshCanvas === undefined || freshPane === null) {
+      throw new Error("expected a resolvable target pane");
+    }
+    expect(paneTabRefs(freshCanvas, freshPane)).toHaveLength(2);
   });
 
   it("falls back to a raw canvas mutation without navigating when the tab has no resolvable epic", () => {
@@ -170,10 +239,15 @@ describe("openTileIntoTargetGroup", () => {
       tabId: "unknown-tab",
       groupId: "group-1",
       ref: REF,
+      dedupe: false,
       navigateNestedFocus: navigation.navigateNestedFocus,
     });
 
     expect(navigation.calls).toHaveLength(0);
-    expect(mock).toHaveBeenCalledWith("unknown-tab", "group-1", REF);
+    expect(mock).toHaveBeenCalledWith("unknown-tab", "group-1", REF, {
+      mode: "permanent",
+      index: null,
+      source: "command_palette",
+    });
   });
 });

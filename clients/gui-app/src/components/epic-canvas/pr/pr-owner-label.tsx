@@ -40,6 +40,7 @@ import {
 import { usePresentPrOwners } from "@/hooks/pr/use-present-pr-owners";
 import { displayTitle } from "@/lib/display-title";
 import { cn } from "@/lib/utils";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 const DELETED_OWNER_LABEL: Record<PrOwnerRef["ownerKind"], string> = {
   chat: "Removed chat",
@@ -77,20 +78,27 @@ function usePrOwnerResolution(args: {
   // the rest of the app already relies on.
   const nodeHostId = useEpicNodeHostId(args.owner.ownerId);
   const hostId = nodeHostId ?? args.fallbackHostId;
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const label = resolvePrOwnerLabel({ owner: args.owner, chat, tuiAgent });
   const { epicId } = args;
   const { ownerId, ownerKind } = args.owner;
   const openOwner = useCallback((): void => {
     if (label === null || hostId === null) return;
-    tileNavigation.openTileInEpic(epicId, {
-      id: ownerId,
-      instanceId: uuidv4(),
-      type: ownerKind,
-      name: label,
-      hostId,
-    });
-  }, [epicId, hostId, label, ownerId, ownerKind, tileNavigation]);
+    openTile(
+      tileIntent(
+        {
+          id: ownerId,
+          instanceId: uuidv4(),
+          type: ownerKind,
+          name: label,
+          hostId,
+        },
+        { epicId },
+        "explicit",
+        "direct_ui",
+      ),
+    );
+  }, [epicId, hostId, label, openTile, ownerId, ownerKind]);
 
   return { label, hostId, Icon: EPIC_NODE_ICONS[ownerKind], openOwner };
 }

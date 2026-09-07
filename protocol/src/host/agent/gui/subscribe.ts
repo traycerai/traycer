@@ -98,6 +98,7 @@ import {
 import {
   heldManagedCommandUpdateSchema,
   managedCommandSchema,
+  managedCommandSchemaPreRelaunch,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
 // The windowed line's payload shapes. They live in their own module (and import
 // nothing from here) so this file can stay the one place every `chat.subscribe`
@@ -879,6 +880,13 @@ function managedCommandsChangedServerFrameSchema<
 
 const chatSubscribeManagedCommandsChangedServerFrameSchema =
   managedCommandsChangedServerFrameSchema(managedCommandSchema);
+
+// `1.6` shipped (cli-v1.2.0) binding the command shape as it then was, so it
+// is pinned to the pre-relaunch literal: the live schema's
+// `relaunchOnHostRestart` belongs to `1.7`+ only, and the host strips it for a
+// `1.6` peer (`chat-frame-projection.ts`).
+const chatSubscribeManagedCommandsChangedServerFrameSchemaV16 =
+  managedCommandsChangedServerFrameSchema(managedCommandSchemaPreRelaunch);
 
 /**
  * The chat's HELD updates changed (`chat.subscribe@1.6`). Same "upsert the
@@ -2423,7 +2431,8 @@ const chatSnapshotSchemaV16 = z.object({
   pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
   accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
   backgroundItems: z.array(backgroundItemSchema).optional(),
-  managedCommands: z.array(managedCommandSchema).default([]),
+  // The shipped command shape - see the `V16` managedCommandsChanged frame.
+  managedCommands: z.array(managedCommandSchemaPreRelaunch).default([]),
   heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
   turnInProgress: z.boolean().optional(),
 });
@@ -2462,7 +2471,7 @@ const chatSubscribeCommonServerFrameSchemasV16 =
 const chatSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
   chatSubscribeSnapshotServerFrameSchemaV16,
   chatSubscribeTurnStateChangedServerFrameSchemaV16,
-  chatSubscribeManagedCommandsChangedServerFrameSchema,
+  chatSubscribeManagedCommandsChangedServerFrameSchemaV16,
   chatSubscribeHeldUpdatesChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasV16,
   blockDeltaServerFrameSchema(runtimeEventSchemaPreSettlement),

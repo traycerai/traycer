@@ -31,10 +31,8 @@ import type {
   DesktopWindowsBridge,
 } from "@/lib/windows/types";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
-import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-} from "@/stores/epics/open-epic/store";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
   clearDesktopTabsPersistence,
   installDesktopTabsPersistence,
@@ -77,11 +75,17 @@ const fakeStreamClientFactory: EpicStreamClientFactory = () => ({
 });
 
 function registerDirtySession(epicId: string): void {
-  const handle = createOpenEpicStore({
-    epicId,
-    streamClientFactory: fakeStreamClientFactory,
+  const handle = openStoreForTest({
+    epicId: epicId,
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: fakeStreamClientFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   handle.store.setState({ isDirty: true });
   __getOpenEpicRegistryForTests().acquire(epicId, () => handle);
@@ -189,7 +193,7 @@ function createControllableWindowsBridge(): ControllableWindowsBridge {
     authSession: {
       get: () =>
         Promise.resolve({ status: "signed-out", token: null, profile: null }),
-      set: () => Promise.resolve(),
+      set: () => Promise.resolve({ outcome: "accepted" as const }),
       onChange: () => ({ dispose: () => undefined }),
     },
   };

@@ -6,7 +6,7 @@ import * as Y from "yjs";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type {
   ChatRecordHeadStamp,
-  ChatRecordSummaryV11,
+  ChatRecordSummaryV12,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import {
@@ -28,10 +28,10 @@ import {
 import { localChatLastActiveAtById } from "@/lib/chats/unified-chat-list";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import {
-  createOpenEpicStore,
   type EpicStreamClientFactory,
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 /**
  * A NESTED foreign child reorders on a head-only delta, exactly as a root
@@ -165,15 +165,21 @@ function createSession(): OpenEpicStoreHandle {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: factory,
     // `null`: this test's assertions are about ordering, not about the
-    // owner-visibility filter `unionChatsSlice` applies to RECORD rows - a
+    // owner-visibility filter the record slice applies to RECORD rows - a
     // non-null viewer here would additionally have to match `OWNER_USER_ID`
     // for the head-only delta below to overlay `chats.byId` at all.
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now, not the store - see
+    // `chat-records-union.test.ts`'s `newSession`.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    // Explicit: this suite never writes.
+    writeCommand: null,
   });
   if (captured.value === null) throw new Error("stream factory not invoked");
   const donor = new Y.Doc();
@@ -185,8 +191,8 @@ function createSession(): OpenEpicStoreHandle {
 
 /** Mirrors the `record()` fixture helper in chat-records-union.test.ts. */
 function record(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+  overrides: Partial<ChatRecordSummaryV12>,
+): ChatRecordSummaryV12 {
   return {
     chatId: OLD_ID,
     ownerUserId: OWNER_USER_ID,
@@ -202,6 +208,9 @@ function record(
     revision: 1,
     visibility: "task",
     origin: "foreign",
+    // A registry-homed replica: this suite is about ordering, and the home
+    // has no part in it.
+    docResident: false,
     ...overrides,
   };
 }
@@ -222,9 +231,10 @@ function headStamp(
  * (same title, parent, timestamps, archive state) so overlaying the union
  * changes nothing OLD already displayed - the only new fact is the head. This
  * is the FIRST record this identity ever receives (OLD exists only as a doc
- * entry beforehand), so `mergeChatRecordRow` takes it outright; what makes it
- * read as "head-only" is that every other field is unchanged from what the
- * doc projection already showed.
+ * entry beforehand), so the record table takes it outright; what makes it read
+ * as "head-only" is that every other field is unchanged from what the doc
+ * projection already showed - the only new fact is the head, which lands on
+ * its own plane.
  */
 function applyHeadOnlyDeltaForOld(handle: OpenEpicStoreHandle): void {
   handle.store.getState().applyChatRecordDelta({

@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HostDirectoryEntry } from "../host-directory";
-import {
-  HostBindingAuthorityRegistry,
-  StaleHostBindingAuthorityError,
-} from "../host-binding-authority-registry";
+import { StaleHostBindingAuthorityError } from "../host-binding-authority-error";
+import { HostBindingAuthorityRegistry } from "../host-binding-authority-registry";
 
 function entry(
   overrides: Partial<HostDirectoryEntry> &

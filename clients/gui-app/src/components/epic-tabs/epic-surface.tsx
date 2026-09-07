@@ -10,7 +10,7 @@ import {
 } from "@/components/epic-tabs/pane-visibility-context";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
 import { useTabSurfaceActivity } from "@/components/layout/tab-surface-activity-hooks";
-import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/agent-tab-surfacing";
+import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
 import { AgentBrowserPip } from "@/components/epic-canvas/pip/agent-browser-pip";
 import { BrowserSessionsProvider } from "@/components/epic-canvas/renderers/browser-sessions-provider";
@@ -26,11 +26,11 @@ export function EpicSurface(props: EpicSurfaceProps) {
   // Report visibility for the agent-tab-surfacing pipeline: PiP auto-surfacing
   // only arms while this epic is the visible surface.
   useEffect(() => {
-    setEpicSurfaceVisibility(props.epicId, activity.visible);
+    setEpicSurfaceVisibility(props.epicId, props.tabId, activity.visible);
     return () => {
-      setEpicSurfaceVisibility(props.epicId, false);
+      setEpicSurfaceVisibility(props.epicId, props.tabId, false);
     };
-  }, [props.epicId, activity.visible]);
+  }, [activity.visible, props.epicId, props.tabId]);
   const activeRoute = useMatch({
     from: "/epics/$epicId/$tabId",
     shouldThrow: false,
@@ -54,19 +54,19 @@ export function EpicSurface(props: EpicSurfaceProps) {
     <PaneSurfaceActivityContext.Provider value={activity}>
       <PaneVisibilityContext.Provider value={activity.visible}>
         <EpicSessionProvider epicId={props.epicId} tabId={props.tabId}>
-          <BrowserSessionsProvider epicId={props.epicId}>
-            {/* Registers the mobile header's right actions (the tab switcher
-                trigger) for this epic PANE - focused or merely retained - so a
-                focus switch onto an already-retained tab resolves its trigger
-                in that same commit, with no register-on-focus gap. Which pane's
-                entry the header shows is resolution's call, keyed by the tab
-                layout's focused ref rather than the route - so the trigger also
-                appears on a phone cold restore, where the layout restores the
-                tab but the router boots at `/`, leaving the route-active
-                effects below unmounted. Self-gates on mobile, so desktop
-                registers nothing either way. */}
-            <MobileEpicHeaderActionsBinder tabId={props.tabId} />
-            <EpicViewTabContext.Provider value={props.tabId}>
+          <EpicViewTabContext.Provider value={props.tabId}>
+            <BrowserSessionsProvider epicId={props.epicId}>
+              {/* Registers the mobile header's right actions (the tab switcher
+                  trigger) for this epic PANE - focused or merely retained - so a
+                  focus switch onto an already-retained tab resolves its trigger
+                  in that same commit, with no register-on-focus gap. Which pane's
+                  entry the header shows is resolution's call, keyed by the tab
+                  layout's focused ref rather than the route - so the trigger also
+                  appears on a phone cold restore, where the layout restores the
+                  tab but the router boots at `/`, leaving the route-active
+                  effects below unmounted. Self-gates on mobile, so desktop
+                  registers nothing either way. */}
+              <MobileEpicHeaderActionsBinder tabId={props.tabId} />
               <div
                 className="flex min-h-0 min-w-0 flex-1 flex-row"
                 data-epic-surface={props.tabId}
@@ -95,13 +95,13 @@ export function EpicSurface(props: EpicSurfaceProps) {
                   />
                 </div>
               </div>
-            </EpicViewTabContext.Provider>
-            <AgentBrowserPip
-              epicId={props.epicId}
-              viewTabId={props.tabId}
-              surfaceVisible={activity.visible}
-            />
-          </BrowserSessionsProvider>
+              <AgentBrowserPip
+                epicId={props.epicId}
+                viewTabId={props.tabId}
+                surfaceVisible={activity.visible}
+              />
+            </BrowserSessionsProvider>
+          </EpicViewTabContext.Provider>
         </EpicSessionProvider>
       </PaneVisibilityContext.Provider>
     </PaneSurfaceActivityContext.Provider>

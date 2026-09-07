@@ -12,6 +12,7 @@ import {
 } from "../install-lifecycle";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { SwapLockRecovery } from "../../installer";
+import { epochMicrosNow } from "../platforms/windows";
 
 const mocks = vi.hoisted(() => ({
   createServiceControllerMock: vi.fn(),
@@ -56,13 +57,24 @@ vi.mock("../platforms/macos", () => ({
   readRegisteredCliInvocation: mocks.readRegisteredCliInvocationMock,
 }));
 
-// The Windows swap-lock recovery functions shell out to schtasks /
-// powershell / taskkill - stub the module so the wiring tests can assert
+// The Windows swap-lock recovery functions shell out to schtasks and
+// powershell - stub the module so the wiring tests can assert
 // the lifecycle hands the label through without touching the OS.
-vi.mock("../platforms/windows", () => ({
-  killLingeringSlotProcesses: mocks.killLingeringSlotProcessesMock,
-  describeSlotLockHolders: mocks.describeSlotLockHoldersMock,
-}));
+vi.mock("../platforms/windows", async () => {
+  // The REAL clock helper, re-exported through the mock: the wiring test
+  // below asserts by identity that this exact function reaches the platform
+  // seam, and separately that it reads in the unit the kill loop compares
+  // against. A reimplementation here would let both pass for a helper that
+  // drifted.
+  const actual = await vi.importActual<typeof import("../platforms/windows")>(
+    "../platforms/windows",
+  );
+  return {
+    killLingeringSlotProcesses: mocks.killLingeringSlotProcessesMock,
+    describeSlotLockHolders: mocks.describeSlotLockHoldersMock,
+    epochMicrosNow: actual.epochMicrosNow,
+  };
+});
 
 // Deliberately NOT mocked: `../cli-invocation-shape`. The self-naming
 // predicate under test in the preserve-path suite below must run for real -
@@ -164,6 +176,7 @@ async function runLifecycle(
     environment: "production",
     bootstrap: options,
     force,
+    onWillStopHost: null,
   });
   await handle.lifecycle.beforeSwap();
   await handle.lifecycle.afterSwap();
@@ -274,6 +287,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
     });
     runningHandle.lifecycle.setMutationVerifier?.(async () => {
       throw lost;
@@ -292,6 +306,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
     });
     let verifierCalls = 0;
     externalHandle.lifecycle.setMutationVerifier?.(async () => {
@@ -316,6 +331,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
     });
     bootstrapHandle.lifecycle.setMutationVerifier?.(async () => {
       throw lost;
@@ -466,6 +482,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        onWillStopHost: null,
       });
 
       await expect(handle.lifecycle.beforeSwap()).rejects.toMatchObject({
@@ -501,6 +518,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        onWillStopHost: null,
       });
 
       await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
@@ -540,6 +558,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        onWillStopHost: null,
       });
 
       await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
@@ -567,6 +586,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        onWillStopHost: null,
       });
       await handle.lifecycle.beforeSwap();
 
@@ -603,6 +623,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
     });
     await handle.lifecycle.beforeSwap();
 
@@ -747,6 +768,207 @@ describe("service install lifecycle re-registration", () => {
   });
 });
 
+describe("runWithPublishedHostStartAdoption (via registerService's install)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.serviceLabelForMock.mockReturnValue(label);
+    mocks.resolveServiceCliInvocationMock.mockResolvedValue({
+      command: "/usr/local/bin/traycer",
+      args: [],
+    });
+    mocks.readRegisteredCliInvocationMock.mockResolvedValue(null);
+  });
+
+  it("waits for the adoption lease before surfacing a committed-registration error", async () => {
+    const lease = {
+      waitForSpawn: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+    };
+    const committedError = new CliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: "registered, but the record could not be committed",
+      details: {
+        label: "ai.traycer.host",
+        phase: "commit",
+        registrationCommitted: true,
+      },
+      exitCode: 1,
+    });
+    const harness = makeController("running");
+    harness.install.mockImplementation(async () => {
+      throw committedError;
+    });
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+    });
+    const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+    if (setPublisher === undefined) {
+      throw new Error("install lifecycle exposes no adoption publisher seam");
+    }
+    setPublisher(async () => lease);
+    await handle.lifecycle.beforeSwap();
+    await handle.lifecycle.afterSwap();
+
+    expect(handle.state.postSwapAction).toBe("install");
+    expect(handle.state.postSwapError).toContain("could not be committed");
+    expect(lease.waitForSpawn).toHaveBeenCalledTimes(1);
+    expect(lease.cancel).toHaveBeenCalledTimes(1);
+    expect(lease.waitForSpawn.mock.invocationCallOrder[0]).toBeLessThan(
+      lease.cancel.mock.invocationCallOrder[0] ?? Infinity,
+    );
+  });
+
+  it("does not wait for the adoption lease on an ordinary OS-actuator error", async () => {
+    const lease = {
+      waitForSpawn: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+    };
+    const osError = new Error("os-failed");
+    const harness = makeController("running");
+    harness.install.mockImplementation(async () => {
+      throw osError;
+    });
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+    });
+    const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+    if (setPublisher === undefined) {
+      throw new Error("install lifecycle exposes no adoption publisher seam");
+    }
+    setPublisher(async () => lease);
+    await handle.lifecycle.beforeSwap();
+    await handle.lifecycle.afterSwap();
+
+    expect(handle.state.postSwapError).toContain("os-failed");
+    expect(lease.waitForSpawn).not.toHaveBeenCalled();
+    expect(lease.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  // A rejecting `cancel()` must never replace the actuator error being
+  // reported: `finally { await lease?.cancel().catch(() => undefined); }`
+  // exists so a cleanup failure can never swap itself in for the real
+  // failure. `postSwapError` only ever carries an Error's `.message` (this
+  // branch never rethrows the raw object for a non-authority error), so
+  // `toBe` here pins the surfaced string to exactly `startError.message` -
+  // never the cancel error's message - which is the only identity check
+  // reachable through the public `createServiceInstallLifecycle` seam.
+  it("surfaces the start error, not a rejecting lease cancel, when both fail", async () => {
+    const startError = new Error("os-failed");
+    const cancelError = new Error("cancel blew up");
+    const lease = {
+      waitForSpawn: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => {
+        throw cancelError;
+      }),
+    };
+    const harness = makeController("running");
+    harness.install.mockImplementation(async () => {
+      throw startError;
+    });
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+    });
+    const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+    if (setPublisher === undefined) {
+      throw new Error("install lifecycle exposes no adoption publisher seam");
+    }
+    setPublisher(async () => lease);
+    await handle.lifecycle.beforeSwap();
+
+    await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
+    expect(handle.state.postSwapError).toBe(startError.message);
+    expect(lease.waitForSpawn).not.toHaveBeenCalled();
+    expect(lease.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  // Companion to the failing-start case above: a successful install with a
+  // rejecting `cancel()` must not turn a completed install into a reported
+  // failure either.
+  it("does not fail the install when a successful lease's cancel rejects", async () => {
+    const lease = {
+      waitForSpawn: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => {
+        throw new Error("cancel blew up");
+      }),
+    };
+    const harness = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+    });
+    const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+    if (setPublisher === undefined) {
+      throw new Error("install lifecycle exposes no adoption publisher seam");
+    }
+    setPublisher(async () => lease);
+    await handle.lifecycle.beforeSwap();
+
+    await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
+    expect(handle.state.postSwapAction).toBe("install");
+    expect(handle.state.postSwapError).toBeNull();
+    expect(lease.waitForSpawn).toHaveBeenCalledTimes(1);
+    expect(lease.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("still surfaces the original committed-registration error when the honoured wait itself rejects", async () => {
+    const lease = {
+      waitForSpawn: vi.fn(async () => {
+        throw new Error("spawn wait transport failed");
+      }),
+      cancel: vi.fn(async () => undefined),
+    };
+    const committedError = new CliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: "registered, but the lifecycle generation could not be written",
+      details: {
+        label: "ai.traycer.host",
+        phase: "lifecycle",
+        registrationCommitted: true,
+      },
+      exitCode: 1,
+    });
+    const harness = makeController("running");
+    harness.install.mockImplementation(async () => {
+      throw committedError;
+    });
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+    });
+    const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+    if (setPublisher === undefined) {
+      throw new Error("install lifecycle exposes no adoption publisher seam");
+    }
+    setPublisher(async () => lease);
+    await handle.lifecycle.beforeSwap();
+    await handle.lifecycle.afterSwap();
+
+    expect(handle.state.postSwapError).toContain(
+      "lifecycle generation could not be written",
+    );
+    expect(lease.waitForSpawn).toHaveBeenCalledTimes(1);
+    expect(lease.cancel).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("swap-lock recovery wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -780,6 +1002,7 @@ describe("swap-lock recovery wiring", () => {
         environment: "production",
         bootstrap: null,
         force: false,
+        onWillStopHost: null,
       });
       const bytesOnly = createBytesOnlyInstallLifecycle(
         harness.controller,
@@ -805,10 +1028,24 @@ describe("swap-lock recovery wiring", () => {
       await expect(recovery.describeLockHolders()).resolves.toEqual(holders);
     }
     expect(mocks.killLingeringSlotProcessesMock).toHaveBeenCalledTimes(2);
+    // The clock is a required dependency, not an ambient one: the kill loop
+    // bounds its cross-round victim memory with it, and a caller that forgot to
+    // pass one would fail at the call rather than quietly reading a global.
+    // Asserted by IDENTITY (the real `epochMicrosNow`, re-exported through the
+    // mock above) and by UNIT: the loop compares this clock against creation
+    // times the scan projects in epoch microseconds, so a clock in
+    // milliseconds would put every victim's window a thousand times too early.
     expect(mocks.killLingeringSlotProcessesMock).toHaveBeenCalledWith(
       label,
       null,
+      { now: epochMicrosNow },
     );
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    try {
+      expect(epochMicrosNow()).toBe(1_700_000_000_000_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
     expect(mocks.describeSlotLockHoldersMock).toHaveBeenCalledWith(label, null);
   });
 
@@ -820,6 +1057,7 @@ describe("swap-lock recovery wiring", () => {
         environment: "production",
         bootstrap: null,
         force: false,
+        onWillStopHost: null,
       });
       const bytesOnly = createBytesOnlyInstallLifecycle(
         harness.controller,
@@ -828,5 +1066,103 @@ describe("swap-lock recovery wiring", () => {
       expect(serviceHandle.lifecycle.swapLockRecovery).toBeNull();
       expect(bytesOnly.swapLockRecovery).toBeNull();
     });
+  });
+});
+
+// The disruption boundary `host update` restores a taken-over progress
+// marker against: reported from the actuator, after the status probe and
+// the authority check, never before either.
+describe("service install lifecycle onWillStopHost", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.serviceLabelForMock.mockReturnValue(label);
+    mocks.resolveServiceCliInvocationMock.mockResolvedValue({
+      command: "/usr/local/bin/traycer",
+      args: [],
+    });
+    mocks.readRegisteredCliInvocationMock.mockResolvedValue(null);
+  });
+
+  it("fires once, after the authority check and immediately before the stop of a running host", async () => {
+    // Falsification: call it before `withServiceMutationAuthority` and the
+    // refused-authority pin below reddens; call it after `controller.stop`
+    // and the order here flips.
+    const harness = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const order: string[] = [];
+    harness.stop.mockImplementation(async () => {
+      order.push("stop");
+    });
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost: () => {
+        order.push("boundary");
+      },
+    });
+
+    await handle.lifecycle.beforeSwap();
+
+    expect(order).toEqual(["boundary", "stop"]);
+    expect(handle.state.stoppedBeforeSwap).toBe(true);
+  });
+
+  it("does not fire when the mutation authority is refused - nothing was touched", async () => {
+    const harness = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const onWillStopHost = vi.fn();
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost,
+    });
+    const lost = new Error("update attempt capability was lost");
+    handle.lifecycle.setMutationVerifier?.(async () => {
+      throw lost;
+    });
+
+    await expect(handle.lifecycle.beforeSwap()).rejects.toBe(lost);
+
+    expect(onWillStopHost).not.toHaveBeenCalled();
+    expect(harness.stop).not.toHaveBeenCalled();
+  });
+
+  it("does not fire when the status probe itself throws - nothing was touched", async () => {
+    const harness = makeController("running");
+    const probeFailure = new Error("launchctl print failed");
+    vi.mocked(harness.controller.status).mockRejectedValue(probeFailure);
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const onWillStopHost = vi.fn();
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost,
+    });
+
+    await expect(handle.lifecycle.beforeSwap()).rejects.toBe(probeFailure);
+
+    expect(onWillStopHost).not.toHaveBeenCalled();
+    expect(harness.stop).not.toHaveBeenCalled();
+  });
+
+  it("does not fire for a service the lifecycle decides not to stop (stopped, on POSIX) - the swap reports that boundary", async () => {
+    const harness = makeController("stopped");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const onWillStopHost = vi.fn();
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost,
+    });
+
+    await withPlatformAsync("linux", () => handle.lifecycle.beforeSwap());
+
+    expect(onWillStopHost).not.toHaveBeenCalled();
+    expect(harness.stop).not.toHaveBeenCalled();
+    expect(handle.state.stoppedBeforeSwap).toBe(false);
   });
 });

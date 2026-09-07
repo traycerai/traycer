@@ -15,7 +15,7 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   ChatRecordHeadStamp,
   ChatRecordSummary,
-  ChatRecordSummaryV11,
+  ChatRecordSummaryStreamV13,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -76,6 +76,7 @@ function makeWsStreamClient(
     clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     endpoint: () => null,
+    hostId: null,
     bearer: () => null,
     auth: null,
     clock: null,
@@ -118,10 +119,15 @@ function row(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
   };
 }
 
-/** The `@1.3` row - `row()` above plus the optional/nullable `head`. */
-function rowV11(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+/**
+ * The `@1.3` STREAM row - `row()` above plus the optional/nullable `head`.
+ *
+ * Deliberately not the list's `@1.2` row: the stream never carries
+ * `docResident`, because a delta cannot state a chat's home.
+ */
+function rowStreamV13(
+  overrides: Partial<ChatRecordSummaryStreamV13>,
+): ChatRecordSummaryStreamV13 {
   return { ...row(overrides), ...overrides };
 }
 
@@ -448,7 +454,7 @@ describe("ChatRecordsStreamClient", () => {
       const h = harness();
       h.session.negotiatedSchemaVersion = { major: 1, minor: 3 };
       const head = headStamp({ publishedAt: 42 });
-      const record = rowV11({ chatId: "chat-a", revision: 7, head });
+      const record = rowStreamV13({ chatId: "chat-a", revision: 7, head });
       h.session.emitFrame({
         kind: "upsert",
         hasBinaryPayload: false,
@@ -468,7 +474,7 @@ describe("ChatRecordsStreamClient", () => {
     it("STRIPS `head` at @1.2 - the older schema is a plain object that discards the added key", () => {
       const h = harness();
       h.session.negotiatedSchemaVersion = { major: 1, minor: 2 };
-      const record = rowV11({
+      const record = rowStreamV13({
         chatId: "chat-a",
         revision: 7,
         head: headStamp({}),
@@ -494,7 +500,7 @@ describe("ChatRecordsStreamClient", () => {
       // `negotiatedSchemaVersion` starts `null` in the harness; asserted here
       // rather than relied upon, since the whole point is this path.
       expect(h.session.negotiatedSchemaVersion).toBeNull();
-      const record = rowV11({
+      const record = rowStreamV13({
         chatId: "chat-a",
         revision: 7,
         head: headStamp({}),
@@ -518,7 +524,11 @@ describe("ChatRecordsStreamClient", () => {
     it("passes `head: null` through at @1.3 - the host's positive 'no publication' statement", () => {
       const h = harness();
       h.session.negotiatedSchemaVersion = { major: 1, minor: 3 };
-      const record = rowV11({ chatId: "chat-a", revision: 7, head: null });
+      const record = rowStreamV13({
+        chatId: "chat-a",
+        revision: 7,
+        head: null,
+      });
       h.session.emitFrame({
         kind: "upsert",
         hasBinaryPayload: false,
@@ -538,7 +548,7 @@ describe("ChatRecordsStreamClient", () => {
     it("drops a frame at @1.3 whose `head` is malformed, instead of guessing at it", () => {
       const h = harness();
       h.session.negotiatedSchemaVersion = { major: 1, minor: 3 };
-      const record = rowV11({
+      const record = rowStreamV13({
         chatId: "chat-a",
         revision: 7,
         // Uppercase digest - the sha256 hex schema is `[0-9a-f]{64}`, closed.

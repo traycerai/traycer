@@ -1,3 +1,4 @@
+import { PingRing } from "@/components/ui/ping-ring";
 import { cn } from "@/lib/utils";
 
 export type LivePulseSize = "xs" | "sm" | "md";
@@ -21,6 +22,8 @@ const TONE_CLASS: Record<LivePulseTone, string> = {
   idle: "bg-muted-foreground/50",
 };
 
+const ACTIVE_RING_PEAK_OPACITY = 0.75;
+
 export function LivePulse(props: LivePulseProps) {
   const { size, tone, ariaLabel, className } = props;
   const toneClass = TONE_CLASS[tone];
@@ -31,11 +34,9 @@ export function LivePulse(props: LivePulseProps) {
       className={cn("relative inline-flex", SIZE_CLASS[size], className)}
     >
       {tone === "active" ? (
-        <span
-          className={cn(
-            "absolute inline-flex h-full w-full animate-ping rounded-full opacity-75",
-            toneClass,
-          )}
+        <PingRing
+          toneClass={toneClass}
+          peakOpacity={ACTIVE_RING_PEAK_OPACITY}
         />
       ) : null}
       <span

@@ -1,14 +1,20 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useId, useMemo } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { History, Search } from "lucide-react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { SessionImportStatusResponse } from "@traycer/protocol/host/session-import/contracts";
 import type {
   SessionImportGroup,
   SessionImportSelection,
 } from "@traycer/protocol/host/session-import/candidate";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import type { SessionImportImportedSupport } from "@traycer-clients/shared/host-transport/session-import-scan-client";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -36,14 +42,25 @@ import {
   SessionImportGroupItem,
 } from "@/components/session-import/session-import-group";
 import { SessionImportProgress } from "@/components/session-import/session-import-progress";
-import { useSessionImportScan } from "@/components/session-import/use-session-import-scan";
-import { startSessionImportRun } from "@/components/session-import/session-import-run-handle";
+import type { SessionImportScanHandle } from "@/components/session-import/use-session-import-scan";
+import {
+  attachSessionImportRun,
+  startSessionImportRun,
+} from "@/components/session-import/session-import-run-handle";
+import { useSessionImportCheckStatus } from "@/hooks/session-import/use-session-import-check-status-query";
+import { useStreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import {
   sessionImportTone,
   type SessionImportTone,
   type SessionImportSurface,
 } from "@/components/session-import/session-import-tone";
-import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
+import {
+  sessionImportRunFor,
+  useSessionImportRun,
+  useSessionImportRunStore,
+  type SessionImportRunStatus,
+} from "@/stores/session-import/session-import-run-store";
+import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 
 export interface SessionImportSecondaryAction {
   readonly label: string;
@@ -52,41 +69,84 @@ export interface SessionImportSecondaryAction {
 
 /**
  * The one import surface, used by the onboarding act and the Settings dialog
- * alike (spec D3). It scans while it is open, never before (D13), and hands the
- * user's selection to the app-wide run controller rather than owning the run
- * itself - which is what lets it be closed mid-import.
+ * alike (spec D3). It hands the user's selection to the app-wide run
+ * controller rather than owning the run itself - which is what lets it be
+ * closed mid-import.
  *
- * The two surfaces differ in who presses go. The dialog owns its own "Import"
- * button; the tour has exactly one forward control, so the act's Continue
- * submits through `registerSubmit` and a second button beside it would be a
- * second way to do the same thing.
+ * The scan is the caller's (`useSessionImportScan`), because the two surfaces
+ * start it at different moments: the dialog when it opens, the tour when it
+ * begins - several acts before this wizard is on screen (D13, revised).
+ *
+ * Both surfaces submit through the wizard's own Import button. The tour used
+ * to submit through its Continue instead, which imported the default selection
+ * without an explicit ask; an import now starts only when Import is pressed.
  */
 export function SessionImportWizard(props: {
   readonly surface: SessionImportSurface;
+  readonly scan: SessionImportScanHandle;
   /** Called once a run has been submitted, so the caller can move on. */
   readonly onImportStarted: () => void;
+  readonly onTaskOpened: () => void;
+  readonly onBeforeTaskOpen: (() => Promise<boolean>) | null;
   readonly secondaryAction: SessionImportSecondaryAction | null;
-  /**
-   * Hands the caller the wizard's submit, for a surface whose go-button lives
-   * outside it. Null on a surface that submits itself.
-   */
-  readonly registerSubmit: ((submit: () => void) => void) | null;
 }) {
-  const { surface, onImportStarted, secondaryAction, registerSubmit } = props;
+  const { surface, scan, onImportStarted, secondaryAction } = props;
   const tone = sessionImportTone(surface);
-  const runStatus = useSessionImportRunStore((state) => state.status);
+  // The run this wizard shows and starts is the one on the host it renders
+  // under - transport and host name off the same binding, which is also what
+  // the submission is aimed at.
+  const streamBinding = useStreamRuntimeBinding();
+  const hostId = streamBinding?.hostId ?? null;
+  const runStatus = useSessionImportRun(hostId).status;
   const runIdle = runStatus === "idle";
+  const statusQuery = useSessionImportCheckStatus(streamBinding, runIdle);
+  const activeRun = statusQuery.isSuccess ? statusQuery.data.active : null;
+  const canSubmit = sessionImportHostIsIdle(statusQuery);
+  const checkingStatus = !statusQuery.isError && !canSubmit;
+  // The controller only probes the app's host on its own. A wizard on any
+  // other host checks through Query first and attaches without selections.
+  // Submission stays disabled until an idle answer arrives, including when
+  // the onboarding scan was populated before this wizard mounted.
+  useEffect(() => {
+    if (!runIdle || !statusQuery.isSuccess || statusQuery.isFetching) return;
+    if (activeRun !== null) attachSessionImportRun(streamBinding, activeRun);
+  }, [
+    activeRun,
+    runIdle,
+    statusQuery.isFetching,
+    statusQuery.isSuccess,
+    streamBinding,
+  ]);
+  // Meeting the wizard on any surface - the tour act, the Settings dialog,
+  // the release toast's own dialog - is the announcement: the id is consumed
+  // on mount so the toast never follows for a user who has already opened
+  // the feature, whether or not they imported anything. Only reaching the
+  // wizard counts; skipping the tour before its act does not, so a skipper
+  // still gets the toast (unlike `login-import`, which the tour's finish
+  // consumes unconditionally).
+  const consumeAnnouncement = useFeatureAnnouncementsStore(
+    (state) => state.consume,
+  );
+  useEffect(() => {
+    consumeAnnouncement("session-import");
+  }, [consumeAnnouncement]);
 
   // Opening the wizard retires a FINISHED run's summary, so a second visit
-  // scans afresh instead of re-reading last time's result. Mount-only on
-  // purpose: a run that finishes while this is open still shows its summary,
-  // because that summary is what the user is waiting for.
+  // scans afresh instead of re-reading last time's result. It does not re-run
+  // while this wizard is open on one host: a run that finishes here still
+  // shows its summary, because that summary is what the user is waiting for.
+  // A host change is a fresh opening onto a different machine, so the same
+  // retirement applies to it.
   useEffect(() => {
-    const run = useSessionImportRunStore.getState();
-    if (run.status === "complete" || run.status === "error") run.reset();
-  }, []);
+    if (hostId === null) return;
+    const store = useSessionImportRunStore.getState();
+    const run = sessionImportRunFor(store, hostId);
+    if (run.status === "complete" || run.status === "error") {
+      store.reset(hostId);
+    }
+  }, [hostId]);
 
-  const { state, dispatch } = useSessionImportScan(runIdle);
+  const { state, dispatch } = scan;
   const view = useMemo(() => buildSessionImportView(state), [state]);
   // The master checkbox reads the VISIBLE slice: it heads the list exactly as
   // the search and pills have narrowed it, so what it shows and what it moves
@@ -97,9 +157,9 @@ export function SessionImportWizard(props: {
   );
 
   const submit = (): void => {
-    // A run already under way owns the screen; Continue during one is the user
-    // moving on, not a second import.
-    if (!runIdle) return;
+    // A run already under way owns the screen, and the button is not rendered
+    // then - this guards a click that raced the store.
+    if (!runIdle || !canSubmit) return;
     const submission = buildSessionImportSubmission(state);
     if (submission.selections.length === 0) return;
     Analytics.getInstance().track(AnalyticsEvent.SessionImportStarted, {
@@ -107,35 +167,18 @@ export function SessionImportWizard(props: {
       session_count: submission.selections.length,
       group_count: submittedGroupCount(state.groups, submission.selections),
     });
-    startSessionImportRun(submission);
+    startSessionImportRun(submission, streamBinding);
     onImportStarted();
   };
 
-  // Re-registered on every render, deliberately: the caller presses Continue
-  // long after this runs, and it has to submit the selection as it stands then,
-  // not the one this mount opened with.
-  useEffect(() => {
-    if (registerSubmit === null) return;
-    registerSubmit(submit);
-  });
-
   if (!runIdle) {
     return (
-      <div className="flex min-h-0 w-full flex-1 flex-col">
-        <SessionImportProgress tone={tone} />
-        {secondaryAction !== null ? (
-          <div className="flex shrink-0 justify-end px-4 py-3">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={secondaryAction.onSelect}
-            >
-              {secondaryAction.label}
-            </Button>
-          </div>
-        ) : null}
-      </div>
+      <SessionImportRunView
+        tone={tone}
+        hostId={hostId}
+        runStatus={runStatus}
+        secondaryAction={secondaryAction}
+      />
     );
   }
 
@@ -147,6 +190,11 @@ export function SessionImportWizard(props: {
         providers={view.providers}
         scanning={state.phase === "scanning"}
         scanWindow={state.scanWindow}
+        showImported={state.showImported}
+        importedSupport={state.importedSupport}
+        onShowImportedChange={(showImported) =>
+          dispatch({ kind: "showImportedChanged", showImported })
+        }
         onQueryChange={(query) => dispatch({ kind: "queryChanged", query })}
         onToggleProvider={(harness) =>
           dispatch({ kind: "providerScopeToggled", harness })
@@ -156,7 +204,7 @@ export function SessionImportWizard(props: {
         }
       />
 
-      {view.groups.length > 0 ? (
+      {view.groups.length > 0 && view.selectableSessions > 0 ? (
         <div className="flex shrink-0 items-center gap-1 px-4 pt-2">
           <button
             type="button"
@@ -166,7 +214,7 @@ export function SessionImportWizard(props: {
                 ? "mixed"
                 : visibleSelection === "all"
             }
-            aria-label="Select all listed work"
+            aria-label="Select all available tasks shown"
             data-testid="session-import-visible-selection"
             disabled={view.visibleSelectionKeys.length === 0}
             onClick={() =>
@@ -196,8 +244,8 @@ export function SessionImportWizard(props: {
               data-testid="session-import-selection-count"
               className={cn("text-ui-xs tabular-nums", tone.faint)}
             >
-              {view.selectedCount.toLocaleString()} of{" "}
-              {view.selectableSessions.toLocaleString()} selected
+              {view.selectedCount.toLocaleString()}{" "}
+              {view.selectedCount === 1 ? "task" : "tasks"} selected for import
             </span>
           ) : null}
         </div>
@@ -241,6 +289,8 @@ export function SessionImportWizard(props: {
             onSetGroupSelection={(groupKey, selected) =>
               dispatch({ kind: "groupSelectionSet", groupKey, selected })
             }
+            onTaskOpened={props.onTaskOpened}
+            onBeforeTaskOpen={props.onBeforeTaskOpen}
             onToggleSession={(selectionKey) =>
               dispatch({ kind: "sessionToggled", selectionKey })
             }
@@ -263,29 +313,79 @@ export function SessionImportWizard(props: {
             </span>
           </div>
         ) : null}
-        {state.phase !== "scanning" && view.groups.length === 0 ? (
-          <p
-            data-testid="session-import-empty"
-            className={cn(
-              "mx-auto max-w-[26rem] px-1 py-10 text-center text-ui-sm",
-              tone.muted,
-            )}
-          >
-            {emptyMessage(state, view)}
-          </p>
-        ) : null}
+        <SessionImportEmptyState
+          state={state}
+          view={view}
+          tone={tone}
+          onShowImported={() =>
+            dispatch({ kind: "showImportedChanged", showImported: true })
+          }
+        />
       </div>
 
+      {statusQuery.isError ? (
+        <div role="alert" className="flex items-center gap-2 px-4 py-2">
+          <p className={cn("text-ui-xs", tone.muted)}>
+            Traycer could not check whether an import is already running.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={statusQuery.isFetching}
+            onClick={() => void statusQuery.refetch()}
+          >
+            Try again
+          </Button>
+        </div>
+      ) : null}
       <SessionImportFooter
         tone={tone}
         view={view}
+        canSubmit={canSubmit}
+        checkingStatus={checkingStatus}
         secondaryAction={secondaryAction}
-        // The surface that hands its submit to a caller has no button of its
-        // own; the one that keeps it renders it here.
-        onSubmit={registerSubmit === null ? submit : null}
+        onSubmit={submit}
       />
     </div>
   );
+}
+
+function SessionImportEmptyState(props: {
+  readonly state: SessionImportWizardState;
+  readonly view: SessionImportWizardView;
+  readonly tone: SessionImportTone;
+  readonly onShowImported: () => void;
+}) {
+  const { state, view, tone, onShowImported } = props;
+  if (state.phase === "scanning" || view.groups.length > 0) return null;
+  return (
+    <div
+      data-testid="session-import-empty"
+      className={cn(
+        "mx-auto max-w-[26rem] px-1 py-10 text-center text-ui-sm",
+        tone.muted,
+      )}
+    >
+      <p>{emptyMessage(state, view)}</p>
+      {view.hiddenImportedCount > 0 && state.importedSupport === "supported" ? (
+        <Button
+          variant="link"
+          className="block mx-auto"
+          onClick={onShowImported}
+        >
+          Show imported
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+/** A pending, failed, or refetching status cannot authorize a new import. */
+function sessionImportHostIsIdle(
+  query: UseQueryResult<SessionImportStatusResponse, HostRpcError>,
+): boolean {
+  return query.isSuccess && !query.isFetching && query.data.active === null;
 }
 
 /**
@@ -298,6 +398,9 @@ function SessionImportFilters(props: {
   readonly providers: ReadonlyArray<SessionImportProviderView>;
   readonly scanning: boolean;
   readonly scanWindow: SessionImportScanWindow;
+  readonly showImported: boolean;
+  readonly importedSupport: SessionImportImportedSupport;
+  readonly onShowImportedChange: (showImported: boolean) => void;
   readonly onQueryChange: (query: string) => void;
   readonly onToggleProvider: (harness: GuiHarnessId) => void;
   readonly onScanWindowChange: (window: SessionImportScanWindow) => void;
@@ -354,7 +457,68 @@ function SessionImportFilters(props: {
             onToggle={onToggleProvider}
           />
         ))}
+        <ImportedVisibilityToggle
+          tone={tone}
+          showImported={props.showImported}
+          support={props.importedSupport}
+          onChange={props.onShowImportedChange}
+        />
       </div>
+    </div>
+  );
+}
+
+function importedVisibilityNotice(
+  support: SessionImportImportedSupport,
+): string | null {
+  switch (support) {
+    case "unsupported":
+      return "Update this host to view imported tasks";
+    case "unknown":
+      return "Checking host support…";
+    case "supported":
+      return null;
+  }
+}
+
+function ImportedVisibilityToggle(props: {
+  readonly tone: SessionImportTone;
+  readonly showImported: boolean;
+  readonly support: SessionImportImportedSupport;
+  readonly onChange: (showImported: boolean) => void;
+}) {
+  const { tone, showImported, support, onChange } = props;
+  const switchId = useId();
+  const disabled = support !== "supported";
+  const checked = showImported && !disabled;
+  return (
+    <div
+      className={cn(
+        "ml-auto flex items-center gap-1.5 px-2 py-1 text-ui-xs",
+        disabled && "opacity-55",
+        tone.muted,
+      )}
+    >
+      <TooltipWrapper
+        label={importedVisibilityNotice(support)}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <Switch
+          id={switchId}
+          checked={checked}
+          aria-label="Show imported"
+          // Keep unavailable controls focusable so the host-support tooltip
+          // is also accessible from the keyboard.
+          aria-disabled={disabled}
+          data-testid="session-import-show-imported"
+          onCheckedChange={(next) => {
+            if (!disabled) onChange(next);
+          }}
+        />
+      </TooltipWrapper>
+      <label htmlFor={switchId}>Show imported</label>
     </div>
   );
 }
@@ -425,18 +589,18 @@ function ScanWindowSelect(props: {
 
 /**
  * The pinned footer: just the actions that end the conversation. The selection
- * count and the master checkbox live at the head of the list they describe, so
- * a surface with no button of its own (the tour, whose Continue lives outside)
- * has no footer at all.
+ * count and the master checkbox live at the head of the list they describe.
  */
 function SessionImportFooter(props: {
   readonly tone: SessionImportTone;
   readonly view: SessionImportWizardView;
+  readonly canSubmit: boolean;
+  readonly checkingStatus: boolean;
   readonly secondaryAction: SessionImportSecondaryAction | null;
-  readonly onSubmit: (() => void) | null;
+  readonly onSubmit: () => void;
 }) {
-  const { tone, view, secondaryAction, onSubmit } = props;
-  if (secondaryAction === null && onSubmit === null) return null;
+  const { tone, view, canSubmit, checkingStatus, secondaryAction, onSubmit } =
+    props;
   return (
     <div
       className={cn(
@@ -454,18 +618,23 @@ function SessionImportFooter(props: {
           {secondaryAction.label}
         </Button>
       ) : null}
-      {onSubmit !== null ? (
-        <Button
-          type="button"
-          size="sm"
-          data-testid="session-import-submit"
-          disabled={view.selectedCount === 0}
-          onClick={onSubmit}
-        >
-          Import {view.selectedCount}{" "}
-          {view.selectedCount === 1 ? "session" : "sessions"}
-        </Button>
-      ) : null}
+      <Button
+        type="button"
+        size="sm"
+        data-testid="session-import-submit"
+        disabled={!canSubmit || view.selectedCount === 0}
+        onClick={onSubmit}
+      >
+        {checkingStatus ? (
+          <AgentSpinningDots
+            className={tone.muted}
+            testId="session-import-status-spinner"
+            variant={undefined}
+          />
+        ) : null}
+        Import {view.selectedCount}{" "}
+        {view.selectedCount === 1 ? "task" : "tasks"}
+      </Button>
     </div>
   );
 }
@@ -547,6 +716,8 @@ function emptyMessage(
 ): string {
   if (state.phase === "failed")
     return "Traycer could not read your work folders.";
+  if (view.hiddenImportedCount > 0 && state.importedSupport === "supported")
+    return "All matching tasks have already been imported.";
   if (view.totalSessions === 0) {
     // A bounded scan finding nothing is not "you have no work" - the window
     // picker above can look further back, and the copy points at it.
@@ -556,4 +727,59 @@ function emptyMessage(
   }
   if (state.query.trim().length > 0) return "No work matches your search.";
   return "No work from the providers you picked.";
+}
+
+/**
+ * What the wizard shows while a run owns the screen: the live progress or
+ * the summary it leaves behind, over the same action row the list phase ends
+ * in, so the wizard's footer stays where the hand already knows it - the
+ * surface's own exit on the left, this wizard's next step on the right.
+ */
+function SessionImportRunView(props: {
+  readonly tone: SessionImportTone;
+  readonly hostId: string | null;
+  readonly runStatus: SessionImportRunStatus;
+  readonly secondaryAction: SessionImportSecondaryAction | null;
+}) {
+  const { tone, hostId, runStatus, secondaryAction } = props;
+  const runFinished = runStatus === "complete" || runStatus === "error";
+  return (
+    <div className="flex min-h-0 w-full flex-1 flex-col">
+      <SessionImportProgress tone={tone} hostId={hostId} />
+      {secondaryAction !== null || runFinished ? (
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t px-4 py-3">
+          {secondaryAction !== null ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={secondaryAction.onSelect}
+            >
+              {secondaryAction.label}
+            </Button>
+          ) : null}
+          {runFinished && hostId !== null ? (
+            // The way back to the list without leaving the wizard. The
+            // summary holds until this is pressed - it is what the user
+            // waited for, and a screen that rewrites itself on a timer would
+            // pull it away mid-read. Retiring the run is all it takes: the
+            // scan is paused only while a run is in flight and resumes on
+            // idle, so the folder list comes back freshly read, with what
+            // just landed now marked as already imported.
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-testid="session-import-more"
+              onClick={() => {
+                useSessionImportRunStore.getState().reset(hostId);
+              }}
+            >
+              {runStatus === "error" ? "Back to sessions" : "Import more"}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }

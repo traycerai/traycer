@@ -3,6 +3,7 @@ import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff
 import { SharingPanel } from "@/components/epic-canvas/panels/epic-sharing/panel";
 import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
 import { FileTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar";
+import { LinkTargetProvider } from "@/lib/links/link-target-provider";
 
 /** The switcher categories whose body is the desktop panel body, unmodified. */
 export type SwitcherEmbedCategory =
@@ -71,7 +72,11 @@ export function SwitcherPanelEmbed(props: SwitcherPanelEmbedProps) {
       className="min-h-0 flex-1 pb-safe-bottom"
       style={SWITCHER_EMBED_SURFACE_STYLE}
     >
-      <SwitcherEmbeddedBody {...props} />
+      {/* A5a: same reason as the desktop sidebar - these bodies render outside
+          `renderTile`, so they need their own link target to open in-app. */}
+      <LinkTargetProvider epicId={props.epicId} viewTabId={props.tabId}>
+        <SwitcherEmbeddedBody {...props} />
+      </LinkTargetProvider>
     </div>
   );
 }

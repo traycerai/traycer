@@ -21,9 +21,6 @@ import type { InterviewQuestion } from "@traycer/protocol/persistence/epic/schem
 
 export interface PendingInterviewView {
   readonly blockId: string;
-  readonly toolName: string | null;
-  readonly title: string | null;
-  readonly description: string | null;
   readonly questions: ReadonlyArray<InterviewQuestion>;
   // Persistent id of the assistant message that owns this pending interview,
   // when it is a stable (non-transient) fork boundary. Drives "fork during

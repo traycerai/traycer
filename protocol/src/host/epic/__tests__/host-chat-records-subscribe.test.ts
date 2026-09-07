@@ -8,7 +8,8 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   chatRecordSummarySchema,
-  chatRecordSummarySchemaV11,
+  chatRecordSummaryStreamV13Schema,
+  chatRecordSummaryV12Schema,
   hostChatRecordsSubscribeClientFrameSchemaV10,
   hostChatRecordsSubscribeOpenRequestSchemaV10,
   hostChatRecordsSubscribeServerFrameSchemaV10,
@@ -17,7 +18,7 @@ import {
   hostChatRecordsSubscribeServerFrameSchemaV13,
   hostChatRecordsSubscribeV10,
   listChatRecordsResponseSchema,
-  listChatRecordsResponseSchemaV11,
+  listChatRecordsResponseV12Schema,
 } from "@traycer/protocol/host/epic/chat-records";
 
 /**
@@ -422,7 +423,7 @@ describe("host.chatRecords.subscribe@1.2 tuiUpsert frames", () => {
   });
 });
 
-describe("chat record head stamp (@1.1 row / @1.3 frames)", () => {
+describe("chat record head stamp (@1.2 list row / @1.3 frames)", () => {
   const HEAD = {
     headSha256: "a".repeat(64),
     throughRecordSeq: 12,
@@ -438,14 +439,37 @@ describe("chat record head stamp (@1.1 row / @1.3 frames)", () => {
   it("accepts a stamp, an explicit null, and an absent key", () => {
     // The three states the wire distinguishes: a publication to point at, the
     // host's positive "there is none" (own rows, and foreign rows never
-    // published), and the older shape an upgraded @1.0 row arrives in.
+    // published), and the older shape an upgraded @1.1 row arrives in.
     expect(
-      chatRecordSummarySchemaV11.safeParse(FOREIGN_PUBLISHED_ROW).success,
+      chatRecordSummaryStreamV13Schema.safeParse(FOREIGN_PUBLISHED_ROW).success,
     ).toBe(true);
     expect(
-      chatRecordSummarySchemaV11.safeParse({ ...OWN_ROW, head: null }).success,
+      chatRecordSummaryStreamV13Schema.safeParse({ ...OWN_ROW, head: null })
+        .success,
     ).toBe(true);
-    expect(chatRecordSummarySchemaV11.safeParse(OWN_ROW).success).toBe(true);
+    expect(chatRecordSummaryStreamV13Schema.safeParse(OWN_ROW).success).toBe(
+      true,
+    );
+  });
+
+  it("keeps `docResident` off the stream row and required on the list row", () => {
+    // The two surfaces' rows DIVERGE here, and the divergence is the point: a
+    // delta cannot state the home (a doc-homed chat does produce deltas, via
+    // `hydrateLegacyDocSecondary`), so the stream row must not carry the field
+    // at all, while the @1.1 list row has carried it since the lane cutover.
+    const streamRow = chatRecordSummaryStreamV13Schema.parse(
+      FOREIGN_PUBLISHED_ROW,
+    );
+    expect(streamRow).not.toHaveProperty("docResident");
+    expect(
+      chatRecordSummaryV12Schema.safeParse(FOREIGN_PUBLISHED_ROW).success,
+    ).toBe(false);
+    expect(
+      chatRecordSummaryV12Schema.safeParse({
+        ...FOREIGN_PUBLISHED_ROW,
+        docResident: false,
+      }).success,
+    ).toBe(true);
   });
 
   it("requires a lowercase hex digest and a non-negative integer seq", () => {
@@ -456,7 +480,8 @@ describe("chat record head stamp (@1.1 row / @1.3 frames)", () => {
       { ...HEAD, throughRecordSeq: 1.5 },
     ]) {
       expect(
-        chatRecordSummarySchemaV11.safeParse({ ...OWN_ROW, head }).success,
+        chatRecordSummaryStreamV13Schema.safeParse({ ...OWN_ROW, head })
+          .success,
       ).toBe(false);
     }
   });
@@ -490,7 +515,7 @@ describe("chat record head stamp (@1.1 row / @1.3 frames)", () => {
     ).not.toHaveProperty("head");
   });
 
-  it("carries the head through the @1.3 upsert frame and the @1.1 list", () => {
+  it("carries the head through the @1.3 upsert frame and the @1.2 list", () => {
     const parsed = hostChatRecordsSubscribeServerFrameSchemaV13.parse({
       kind: "upsert",
       hasBinaryPayload: false,
@@ -505,8 +530,8 @@ describe("chat record head stamp (@1.1 row / @1.3 frames)", () => {
     }
 
     expect(
-      listChatRecordsResponseSchemaV11.parse({
-        chats: [FOREIGN_PUBLISHED_ROW],
+      listChatRecordsResponseV12Schema.parse({
+        chats: [{ ...FOREIGN_PUBLISHED_ROW, docResident: false }],
       }).chats[0].head,
     ).toEqual(HEAD);
   });

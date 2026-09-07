@@ -18,6 +18,7 @@ import {
 import { yXmlFragmentToProseMirrorRootNode } from "@tiptap/y-tiptap";
 import { createLowlight, common } from "lowlight";
 import type * as Y from "yjs";
+import { createIsolatedMarked } from "@/lib/markdown/isolated-marked";
 import { MermaidNode } from "./nodes/mermaid/mermaid-node";
 import { WireframeNode } from "./nodes/wireframe/wireframe-node";
 import { ThreadAnchor } from "./extensions/thread-anchor";
@@ -57,12 +58,29 @@ export const artifactLinkExtension = Link.extend({
   },
 });
 
+/**
+ * The Markdown extension configured with its own private `marked`.
+ *
+ * `@tiptap/markdown` registers one tokenizer per extension into whatever
+ * `marked` it is given and never unregisters them, and its default is the
+ * module-level singleton - so every editor built on the bare extension stayed
+ * reachable for the life of the window (see `createIsolatedMarked`). Anything
+ * that creates an editor or a manager must call this and get a FRESH instance;
+ * the shared `extensions` array below is a schema template, not an editor
+ * configuration.
+ */
+export function createArtifactMarkdownExtension(): AnyExtension {
+  return Markdown.configure({ marked: createIsolatedMarked() });
+}
+
 const extensions: AnyExtension[] = [
   StarterKit.configure({
     undoRedo: false,
     codeBlock: false,
     link: false,
   }),
+  // Contributes no schema. Present so the template lists the whole document
+  // bundle; editors swap it for `createArtifactMarkdownExtension()`.
   Markdown,
   artifactLinkExtension,
   TaskList,
@@ -81,7 +99,12 @@ const extensions: AnyExtension[] = [
 ];
 
 const schema = getSchema(extensions);
-const markdownManager = new MarkdownManager({ extensions });
+// One long-lived manager for export/import; its private `marked` keeps its
+// tokenizer registrations off the module singleton like the editors do.
+const markdownManager = new MarkdownManager({
+  extensions,
+  marked: createIsolatedMarked(),
+});
 
 function isJsonContent(value: unknown): value is JSONContent {
   if (typeof value !== "object" || value === null || !("type" in value)) {

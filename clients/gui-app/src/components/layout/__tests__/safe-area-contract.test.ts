@@ -298,6 +298,13 @@ describe("safe-area token layer (index.css)", () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const cssSource = readFileSync(join(here, "../../../index.css"), "utf8");
 
+  /** One custom-property declaration, whitespace-normalised for matching. */
+  function declarationOf(token: string): string {
+    const match = cssSource.match(new RegExp(`${token}:([^;]*);`));
+    expect(match, `${token} declaration in index.css`).not.toBeNull();
+    return (match?.[1] ?? "").replace(/\s+/g, " ").trim();
+  }
+
   it("declares the four inset custom properties from env(), each with a 0px fallback", () => {
     for (const edge of ["top", "right", "bottom", "left"]) {
       expect(cssSource).toMatch(
@@ -337,6 +344,38 @@ describe("safe-area token layer (index.css)", () => {
     for (const token of requiredTokens) {
       expect(cssSource).toMatch(new RegExp(`${token}:`));
     }
+  });
+
+  it("takes the keyboard off every token that bounds the region an overlay may occupy", () => {
+    // The soft keyboard shortens that region from below exactly as the status
+    // bar shortens it from above, so a token which MEASURES the region or
+    // CENTRES on it has to account for both. `center-y` is the one that did
+    // not: the window-filling surfaces tracked the keyboard correctly while
+    // every centred dialog stayed centred on the whole screen, which on a
+    // phone left the bottom of it - composer, submit button - behind the
+    // keyboard. It divides because moving a midpoint is half of what you did
+    // to the edge; subtracting the whole height would overshoot into the
+    // status bar.
+    expect(declarationOf("--spacing-safe-dvh")).toContain(
+      "- var(--keyboard-inset)",
+    );
+    expect(declarationOf("--spacing-safe-svh")).toContain(
+      "- var(--keyboard-inset)",
+    );
+    expect(declarationOf("--spacing-safe-center-y")).toContain(
+      "- var(--keyboard-inset) / 2",
+    );
+  });
+
+  it("glides the centred overlays with the keyboard, not only the window-filling ones", () => {
+    // Re-centring lands in one frame while the keyboard takes ~250ms to
+    // arrive, so without a transition the dialog teleports past a keyboard
+    // still sliding - the abrupt feel iOS overlay mode was chosen to avoid.
+    // Both rules hang off `traycer-native-keyboard`, which only the installed
+    // app's bridge sets, so both stay inert everywhere else.
+    expect(cssSource).toMatch(
+      /\.traycer-native-keyboard\s+\.top-safe-center-y\s*\{\s*transition:\s*top\s/,
+    );
   });
 
   it("gives #root the app-wide padding every in-flow surface inherits", () => {

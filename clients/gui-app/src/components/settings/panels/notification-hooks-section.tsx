@@ -377,6 +377,7 @@ function HooksEditor(props: {
 
       {pendingDelete === null ? null : (
         <ConfirmDestructiveDialog
+          blockedReason={null}
           open
           title="Delete hook?"
           description={`"${pendingDelete.name ?? pendingDelete.id}" will be removed from the hooks file on the host.`}

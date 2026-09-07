@@ -15,6 +15,7 @@ import {
   verifyServiceMutationAuthority,
   withServiceMutationAuthority,
 } from "../service/mutation-authority";
+import { didServiceRegistrationCommit } from "../service/cli-invocation-record";
 import { publishHostStartAdoption } from "./host-start-adoption";
 import type {
   DesktopRegistrationTakeover,
@@ -171,19 +172,42 @@ export async function startHostServiceWithAttempt(
   });
 }
 
-/** Final-actuator facade for the first half of a controlled restart. */
+/**
+ * Final-actuator facade for the first half of a controlled restart.
+ *
+ * `onAuthorityVerified` runs once the mutation-capability check has passed
+ * and immediately before the actuator is asked to stop the host - the last
+ * point at which THIS facade can still prove nothing was touched. A caller
+ * that keys "have I begun to disturb the host?" on this facade (the `host
+ * update` activation arm's progress-marker rule) marks the boundary here
+ * rather than around the call: a capability check that fails has touched
+ * nothing, and a failure reported from before the boundary must be treated
+ * as one. `null` when the caller keeps no such boundary.
+ *
+ * The boundary is the facade's, not the actuator's. Past it the controller
+ * still runs checks of its own before its first mutating command: the stop
+ * intent is announced first (`HOST_STOP_INTENT_UNWRITABLE` on `--force` or
+ * win32 when the host home cannot be written), and every platform controller
+ * re-verifies the same authority in front of EACH command it issues. A
+ * refusal from either lands after the boundary and is reported as a
+ * disruption even though the host is untouched. Both are narrow - the first
+ * needs the host home unwritable, the second needs the authority lost in the
+ * gap between two consecutive checks - and the caller's rule accepts them.
+ */
 export async function stopHostForRestartWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
   controller: Pick<ServiceController, "stopForRestart">,
   label: ServiceLabel,
   options: StopServiceOptions,
+  onAuthorityVerified: (() => void) | null,
 ): Promise<RestartStop> {
   const verify = (): Promise<void> =>
     requireCliUpdateMutationCapability(capability, contenderOptions);
-  return withServiceMutationAuthority(verify, () =>
-    controller.stopForRestart(label, options),
-  );
+  return withServiceMutationAuthority(verify, () => {
+    if (onAuthorityVerified !== null) onAuthorityVerified();
+    return controller.stopForRestart(label, options);
+  });
 }
 
 /** Final-actuator facade for the relaunch half of a controlled restart. */
@@ -236,6 +260,16 @@ async function runWithHostStartAdoption(
     await verifyServiceMutationAuthority();
     await start();
     await adoption.waitForSpawn();
+  } catch (error) {
+    // A record-step failure after the service manager accepted the
+    // registration means the supervisor is already launching and will present
+    // this lease; cancelling first would refuse an admitted child. Honour the
+    // lease, then surface the record error unchanged (a failed wait must not
+    // replace it - see the cleanup rule below).
+    if (didServiceRegistrationCommit(error)) {
+      await adoption.waitForSpawn().catch(() => undefined);
+    }
+    throw error;
   } finally {
     // Cleanup must never replace the actuator error: callers classify it to
     // choose between park/abort and an ordinary busy refusal, and a rejected

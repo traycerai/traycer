@@ -36,6 +36,8 @@ import {
   OnboardingAgentGuidePane,
   type OnboardingAgentGuideState,
 } from "@/components/onboarding/onboarding-agent-guide-pane";
+import type { OnboardingHostPicker } from "@/components/onboarding/onboarding-host-picker-model";
+import { OnboardingHostPickerBar } from "@/components/onboarding/onboarding-host-picker";
 import { EASE, TASKS } from "@/components/onboarding/onboarding-diorama-shared";
 import { OnboardingClaudeTui } from "@/components/onboarding/onboarding-claude-tui";
 import { OnboardingOpencodeTui } from "@/components/onboarding/onboarding-opencode-tui";
@@ -55,6 +57,8 @@ import { cn } from "@/lib/utils";
 interface OnboardingDioramaProps {
   readonly actId: DesktopOnboardingActId;
   readonly agentGuide: OnboardingAgentGuideState;
+  /** Carried for the guide's own title bar - see `AgentGuideModal`. */
+  readonly hostPicker: OnboardingHostPicker;
 }
 
 type NodeKind =
@@ -209,10 +213,11 @@ const THEME_DOCK_SWATCHES = [
 
 /**
  * `null` is an act that shows no mini-app at all (session import, whose stage
- * is the live wizard). The page does not render the diorama for it, and this
- * map is where that fact is stated: defaulting to a scene instead would mount
- * the command-theme mini-app - animations and all - behind an act that
- * deliberately hides the diorama.
+ * is the live wizard; login import, whose stage is the live import flow). The
+ * page does not render the diorama for them, and this map is where that fact
+ * is stated: defaulting to a scene instead would mount the command-theme
+ * mini-app - animations and all - behind an act that deliberately hides the
+ * diorama.
  */
 const SCENE_FOR_ACT: Readonly<Record<DesktopOnboardingActId, SceneId | null>> =
   {
@@ -221,6 +226,7 @@ const SCENE_FOR_ACT: Readonly<Record<DesktopOnboardingActId, SceneId | null>> =
     "task-context": "task-context",
     providers: "providers",
     "session-import": null,
+    "login-import": null,
     "agent-guide": "agent-guide",
     "command-theme": "command-theme",
   };
@@ -228,14 +234,21 @@ const SCENE_FOR_ACT: Readonly<Record<DesktopOnboardingActId, SceneId | null>> =
 export function OnboardingDiorama(props: OnboardingDioramaProps) {
   const scene = SCENE_FOR_ACT[props.actId];
   if (scene === null) return null;
-  return <DioramaScene scene={scene} agentGuide={props.agentGuide} />;
+  return (
+    <DioramaScene
+      scene={scene}
+      agentGuide={props.agentGuide}
+      hostPicker={props.hostPicker}
+    />
+  );
 }
 
 function DioramaScene(props: {
   readonly scene: SceneId;
   readonly agentGuide: OnboardingAgentGuideState;
+  readonly hostPicker: OnboardingHostPicker;
 }) {
-  const { scene, agentGuide } = props;
+  const { scene, agentGuide, hostPicker } = props;
   const reducedMotion = useReducedMotion() === true;
   const [taskIndex, setTaskIndex] = useState(0);
   const dragLayerRef = useRef<HTMLDivElement>(null);
@@ -311,7 +324,22 @@ function DioramaScene(props: {
           scene === "command-theme" && "max-lg:hidden",
         )}
       >
-        <MiniAppHeader activeIndex={activeTaskIndex} className="" />
+        {scene === "agent-guide" ? (
+          // The window's title is the host picker on this act: the guide is
+          // stored on a host, and the card floating below already says what
+          // it is. `z-30` lifts the bar above the modal's scrim (`z-20`), or
+          // the one control that changes the host would sit under a dimmer.
+          <OnboardingHostPickerBar
+            picker={hostPicker}
+            trafficLights
+            // Above the modal's own full-window container (`z-30`), which is
+            // a later sibling and would otherwise paint over this bar and
+            // take its clicks.
+            className="z-40"
+          />
+        ) : (
+          <MiniAppHeader activeIndex={activeTaskIndex} className="" />
+        )}
         <div
           ref={dragLayerRef}
           className="relative min-h-0 flex-1 bg-background"
@@ -341,7 +369,7 @@ function DioramaScene(props: {
         </div>
         {scene === "providers" ? <ProvidersFocusScene /> : null}
         {scene === "agent-guide" ? (
-          <AgentGuideModal agentGuide={agentGuide} />
+          <AgentGuideModal agentGuide={agentGuide} hostPicker={hostPicker} />
         ) : null}
         {scene === "command-theme" ? (
           <CommandThemeScene reducedMotion={reducedMotion} />
@@ -1354,6 +1382,7 @@ function OpencodeStoryBody(props: {
 // guide content, no settings nav chrome.
 function AgentGuideModal(props: {
   readonly agentGuide: OnboardingAgentGuideState;
+  readonly hostPicker: OnboardingHostPicker;
 }) {
   return (
     <>
@@ -1371,7 +1400,10 @@ function AgentGuideModal(props: {
           transition={{ duration: 0.28, ease: EASE }}
           className="flex h-[80%] w-[80%] min-h-0"
         >
-          <OnboardingAgentGuidePane agentGuide={props.agentGuide} />
+          <OnboardingAgentGuidePane
+            agentGuide={props.agentGuide}
+            hostPicker={props.hostPicker}
+          />
         </m.div>
       </div>
     </>

@@ -36,6 +36,7 @@ import type {
 } from "../../host-transport/ws-factory";
 import type {
   ClientFrame,
+  ClientRequestFrame,
   HostFrame,
 } from "@traycer/protocol/framework/ws-protocol";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
@@ -202,6 +203,16 @@ class StubWebSocket implements WebSocketLike {
     };
     this.onmessage?.({ data: JSON.stringify(frame) });
   }
+}
+
+function readRequestFrame(socket: StubWebSocket): ClientRequestFrame {
+  const frame = socket.sentFrames.find(
+    (candidate) => candidate.kind === "request",
+  );
+  if (frame === undefined || frame.kind !== "request") {
+    throw new Error("Expected request frame");
+  }
+  return frame;
 }
 
 describe("HostClient", () => {
@@ -406,6 +417,35 @@ describe("HostClient", () => {
     }
   });
 
+  it("coalesces N independently-wired reports arriving in SEPARATE macrotasks into one sweep plus one trailing catch-up", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, invalidator, events } = buildHostClientWithMock();
+
+      // The production shape the older cases miss: every wiring in this suite
+      // reports in the same synchronous tick, so a purely-microtask merge
+      // would satisfy them. A window runs a dozen or more stream clients and
+      // each one's recovery cooldown fires on its own timer, so the reports
+      // land in separate macrotasks - which is what the time-gated leading
+      // edge, not the microtask merge, is holding to one call.
+      for (let i = 0; i < 5; i += 1) {
+        client.notifyHostAvailabilityRecovered("mock-local");
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      expect(invalidator.calls).toEqual(["mock-local"]);
+      expect(events).toHaveLength(1);
+
+      // One trailing catch-up for the reports the gate swallowed, and no more.
+      await vi.advanceTimersByTimeAsync(HOST_AVAILABILITY_SWEEP_WINDOW_MS);
+      expect(invalidator.calls).toEqual(["mock-local", "mock-local"]);
+      expect(events).toHaveLength(2);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("delegates a requester's unary request to the messenger under that host's authority", async () => {
     const { client, requester, messenger } = buildHostClientWithMock();
     client.setRequestContext(makeContext("user-1", "tok-1"));
@@ -425,6 +465,48 @@ describe("HostClient", () => {
         bearer: client.getRequestContext()?.credentials,
       },
     });
+  });
+
+  it("emits byte-identical frames for request and an explicit null idempotency key", async () => {
+    const invalidator = new RecordingInvalidator();
+    const sockets: StubWebSocket[] = [];
+    const factory: IWebSocketFactory = {
+      create(): WebSocketLike {
+        const socket = new StubWebSocket();
+        sockets.push(socket);
+        queueMicrotask(() => socket.fireOpen());
+        return socket;
+      },
+    };
+    const wsClient = new WsRpcClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry,
+      requestId: () => "req-byte-identical",
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      frameTimeoutMs: 1_000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const client = new HostClient({
+      registry,
+      invalidator,
+      messenger: wsClient,
+      schedulingPolicy,
+      requestCoordinator: null,
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    });
+    client.setRequestContext(makeContext("user-1", "tok-1"));
+    const requester = client.createRequester(mockLocalHostEntry);
+
+    await requester.request("host.ping", {});
+    await requester.requestWithIdempotencyKey("host.ping", {}, null);
+
+    expect(sockets).toHaveLength(2);
+    expect(JSON.stringify(readRequestFrame(sockets[0]))).toBe(
+      JSON.stringify(readRequestFrame(sockets[1])),
+    );
   });
 
   it("createRequester follows same-host directory refreshes instead of freezing its snapshot", async () => {

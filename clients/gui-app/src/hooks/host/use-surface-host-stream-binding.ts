@@ -1,6 +1,7 @@
 import { use, useMemo } from "react";
 import {
   authenticatedOwnerIdentityKey,
+  streamTransportRetain,
   useHostStreamClientBindingFor,
 } from "@/hooks/host/use-host-stream-client-for";
 import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -93,13 +94,21 @@ export function useSurfaceHostStreamBinding(
   const expectedKey = authenticatedOwnerIdentityKey(ambientClient, entry);
   const matched =
     binding !== null && binding.transportKey === expectedKey ? binding : null;
-  const client = matched === null ? null : matched.client;
   // Safe to read off `entry` only BECAUSE the key matched: that comparison is
   // what proves this client was built for the target we are naming it with.
   const hostId = matched === null ? null : (entry?.hostId ?? null);
   const pinned = useMemo(
-    () => (client === null ? null : { wsStreamClient: client, hostId }),
-    [client, hostId],
+    () =>
+      matched === null
+        ? null
+        : {
+            wsStreamClient: matched.client,
+            hostId,
+            // Reference-counted, and this hook holds only the surface's own
+            // reference: anything that outlives the surface takes its own.
+            retain: streamTransportRetain(matched),
+          },
+    [matched, hostId],
   );
   if (!isFollowing) return pinned;
   // Following: the ambient binding, once it names the host this surface

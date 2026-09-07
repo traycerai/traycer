@@ -192,3 +192,41 @@ export function parseHttpUrl(url: string): URL | null {
     ? parsed
     : null;
 }
+
+/**
+ * What the address bar does with what the user typed: a bare local address
+ * gets `http://`, anything else with no scheme gets `https://`, an explicit
+ * scheme is left alone, and an empty box means the blank page.
+ */
+export function normalizeBrowserAddressInput(input: string): string {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) return "about:blank";
+  // Scheme FIRST: `https://app.localhost:3000` already says what it is, and
+  // the local-address heuristic below would otherwise prefix a second scheme
+  // onto it (C7). The negative lookahead is what keeps `localhost:3000` out of
+  // this branch - a colon followed by digits is a port, not a scheme.
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d)/.test(trimmed)) return trimmed;
+  if (looksLikeLocalHttpAddressWithoutScheme(trimmed)) {
+    return `http://${trimmed}`;
+  }
+  return `https://${trimmed}`;
+}
+
+function looksLikeLocalHttpAddressWithoutScheme(value: string): boolean {
+  const lower = value.toLowerCase();
+  // Test the hostname, not the whole string: `app.localhost/path` is as local
+  // as `app.localhost`, and guessing https for it fails against a plain HTTP
+  // dev server.
+  const authority = lower.split(/[/?#]/, 1)[0] ?? "";
+  const hostname = authority.replace(/:\d+$/, "");
+  return (
+    lower === "localhost" ||
+    lower.startsWith("localhost:") ||
+    lower.startsWith("localhost/") ||
+    hostname.endsWith(".localhost") ||
+    lower.startsWith("127.") ||
+    lower.startsWith("0.0.0.0") ||
+    lower.startsWith("[::1]") ||
+    lower.startsWith("::1:")
+  );
+}

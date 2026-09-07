@@ -344,6 +344,16 @@ export interface IRunnerHost {
   openMicrophoneSettings(): Promise<void>;
 
   /**
+   * Opens the macOS Privacy → Full Disk Access pane, where the login import
+   * sends a user whose Safari jar the OS refused to let Traycer read. A
+   * dedicated method rather than an `openExternalLink(...)` of the pane's
+   * `x-apple.systempreferences:` URL, which the desktop's http(s)-only link
+   * gate would refuse silently. Shells without the pane (other platforms,
+   * mobile/web/tests) implement this as a resolved no-op.
+   */
+  openFullDiskAccessSettings(): Promise<void>;
+
+  /**
    * Called by the GUI auth controller immediately before
    * `openExternalLink(...)`.
    * Implementations close the previous attempt window (so any callback URL
@@ -628,6 +638,33 @@ export interface IRunnerHost {
    * (desktop, dev web, tests), where the GUI hides the surface entirely.
    */
   readonly pushPermission: IPushPermissionHost | null;
+
+  /**
+   * The OS "back" request - Android's hardware key and its system back
+   * gesture, which the OS delivers as one event and which never reach the
+   * WebView as a touch. Present only on shells whose OS raises such a request
+   * (the Android shell) and `null` everywhere else: iOS has no back button
+   * and its edge swipe is the GUI's own recognizer; desktop and the browser
+   * have their own back affordances.
+   *
+   * The signal is payload-free. What "back" MEANS - close a drawer, dismiss a
+   * dialog, step the app's history - is the GUI's decision, made against the
+   * same in-app history the edge swipe and the desktop arrows walk. The
+   * shell's only other contribution is `minimize`, for a press with nothing
+   * left to go back to: the platform's answer is to step out of the way, not
+   * to sit on a press that visibly did nothing.
+   */
+  readonly systemBack: ISystemBackHost | null;
+}
+
+/**
+ * The OS back request, where one exists. See `IRunnerHost.systemBack`.
+ */
+export interface ISystemBackHost {
+  /** Fires once per OS back request; carries nothing. */
+  onBack(handler: () => void): Disposable;
+  /** Sends the app to the background, leaving it warm for the next resume. */
+  minimize(): Promise<void>;
 }
 
 /**
@@ -1164,6 +1201,17 @@ export type AuthTokenRefreshResult =
   | { readonly kind: "rejected" }
   | { readonly kind: "network-error" };
 
+/**
+ * Opaque string slots. `get` returns EXACTLY the string `set` was handed, or
+ * `null` only when nothing is stored - a value must never read as absent.
+ *
+ * Worth stating because the one production implementation broke it silently:
+ * the desktop adapter's encrypt-storage back-end JSON-parses on read by
+ * default, so a value that happened to be valid JSON came back as an object
+ * and was reported as `null`. JWTs are not valid JSON, so the token slots
+ * masked it. An implementation that transforms values, or that cannot
+ * distinguish "unreadable" from "unset", does not satisfy this interface.
+ */
 export interface ISecureStorage {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<void>;

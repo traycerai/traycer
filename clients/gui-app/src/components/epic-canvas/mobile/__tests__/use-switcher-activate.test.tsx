@@ -10,8 +10,8 @@ import type {
 } from "@/stores/epics/canvas/types";
 
 // Run the prepared focus mutation synchronously and skip route focus routing,
-// so the real canvas store transitions run in the test (mirrors the tile-view
-// test's direct-prepare approach).
+// so the real `openTile` seam - resolver, executor and canvas store - runs in
+// the test (mirrors the tile-view test's direct-prepare approach).
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation:
     () => (_epicId: string, _tabId: string, prepare: () => unknown) => {
@@ -79,8 +79,28 @@ function pane(): TilePane {
   return root;
 }
 
+/**
+ * The pane opener mints a fresh `instanceId` for every tile it lands (a second
+ * view of the same content is a distinct tab), so the pane's membership is
+ * identified by CONTENT id here - the instance ids these tests hand in are
+ * only meaningful for the tiles already seeded in the canvas.
+ */
+function paneContentIds(): (string | null)[] {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[TAB_ID];
+  return pane().tabInstanceIds.map(
+    (id) => canvas?.tilesByInstanceId[id]?.id ?? null,
+  );
+}
+
+function previewContentId(): string | null {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[TAB_ID];
+  const previewTabId = pane().previewTabId;
+  if (previewTabId === null) return null;
+  return canvas?.tilesByInstanceId[previewTabId]?.id ?? null;
+}
+
 function renderActivate(onClose: () => void) {
-  return renderHook(() => useSwitcherActivate(EPIC_ID, TAB_ID, onClose));
+  return renderHook(() => useSwitcherActivate(TAB_ID, onClose));
 }
 
 describe("useSwitcherActivate", () => {
@@ -98,8 +118,8 @@ describe("useSwitcherActivate", () => {
     });
 
     // The tab COUNT is the assertion: a permanent open would make this three.
-    expect(pane().tabInstanceIds).toEqual(["inst-1", "inst-3"]);
-    expect(pane().previewTabId).toBe("inst-3");
+    expect(paneContentIds()).toEqual(["spec-1", "spec-3"]);
+    expect(previewContentId()).toBe("spec-3");
     expect(activeArtifactId()).toBe("spec-3");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -132,7 +152,7 @@ describe("useSwitcherActivate", () => {
 
     // `inst-1` was never the preview, so no number of taps reaches it - which
     // is what keeps a kept chat inside the pane's retention window.
-    expect(pane().tabInstanceIds).toEqual(["inst-1", "inst-4"]);
+    expect(paneContentIds()).toEqual(["spec-1", "spec-4"]);
     expect(pane().activationHistory).toContain("inst-1");
   });
 
@@ -181,10 +201,10 @@ describe("useSwitcherActivate", () => {
 
     // A cross-host clone carries the source's chat id verbatim, so matching on
     // the id alone would hand back the other machine's tile.
-    expect(pane().tabInstanceIds).toEqual(["inst-a", "inst-b"]);
+    expect(paneContentIds()).toEqual(["chat-1", "chat-1"]);
     const opened =
       useEpicCanvasStore.getState().canvasByTabId[TAB_ID]?.tilesByInstanceId[
-        "inst-b"
+        pane().tabInstanceIds[1]
       ];
     if (opened?.type !== "chat") throw new Error("expected a chat tile");
     expect(opened.hostId).toBe(HOST_B);

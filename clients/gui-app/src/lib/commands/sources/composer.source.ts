@@ -8,12 +8,11 @@
  *     "Select PC") - selecting pushes a cmdk page with the
  *     provider / model / device list. Item dispatch writes to the
  *     registered composer's setter.
- *   - Immediate rows ("New chat in active tile", "New chat in split
- *     (right/bottom)", "New terminal agent") - visible only when
- *     `activeTabId !== null`. They open the shared New Conversation
- *     modal seeded for the command's composer mode + preferred tile
- *     placement; the modal composes the first prompt and creates +
- *     places the result on submit.
+ *   - Immediate rows ("New agent", "New Terminal-interface
+ *     agent") - visible only when `activeTabId !== null`. They open the
+ *     shared New Conversation modal seeded for the command's composer mode;
+ *     the modal composes the first prompt and creates the result on submit,
+ *     which lands wherever the conversation tile-placement setting says (C8).
  *
  * The "Select PC" row is landing-only (host is locked on existing
  * chats - final, not a v2 candidate).
@@ -44,8 +43,7 @@ import type {
   ReactCommandSource,
 } from "@/lib/commands/types";
 import type { ChordString } from "@/lib/keybindings/chord";
-import type { ConversationTilePlacement } from "@/lib/canvas/conversation-tile-placement";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
@@ -103,8 +101,6 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
       const epicId = ctx.activeEpicId;
       const tabId = ctx.activeTabId;
       items.push(buildNewChatReplaceItem({ epicId, tabId }));
-      items.push(buildNewChatSplitItem({ epicId, tabId, position: "right" }));
-      items.push(buildNewChatSplitItem({ epicId, tabId, position: "bottom" }));
       items.push(buildNewTerminalAgentItem({ epicId, tabId }));
     }
     return items;
@@ -208,7 +204,7 @@ function openNewConversationModal(
   epicId: string,
   tabId: string,
   mode: ComposerMode,
-  placement: ConversationTilePlacement,
+  placement: ExplicitTilePlacement | null,
 ): void {
   useNewConversationModalStore.getState().setComposerMode(epicId, mode);
   // `hostId: null` names no host, the same as the Epic sidebar's own `+`: the
@@ -229,50 +225,16 @@ function buildNewChatReplaceItem(args: {
   const { epicId, tabId } = args;
   return {
     id: "composer:new-chat:replace",
-    label: "New agent in active tile",
+    label: "New agent",
     description:
-      "Compose a new Chat-interface agent in place of the currently active tile.",
+      "Compose a new Chat-interface agent; it lands where the conversation tile-placement setting says.",
     keywords: ["new", "chat", "agent", "replace"],
     group: "suggested",
     scope: "actions",
     shortcut: null,
     actionId: null,
     subpage: null,
-    run: () =>
-      openNewConversationModal(epicId, tabId, "chat", { kind: "active-tile" }),
-  };
-}
-
-function buildNewChatSplitItem(args: {
-  readonly epicId: string;
-  readonly tabId: string;
-  readonly position: "right" | "bottom";
-}): CommandItem {
-  const { epicId, tabId, position } = args;
-  const label =
-    position === "right"
-      ? "New agent in split (right)"
-      : "New agent in split (bottom)";
-  return {
-    id: `composer:new-chat:split:${position}`,
-    label,
-    description: `Split the active tile and compose a new Chat-interface agent on the ${position}.`,
-    keywords: ["new", "chat", "agent", "split", position],
-    group: "suggested",
-    scope: "actions",
-    shortcut: null,
-    actionId: null,
-    subpage: null,
-    run: () => {
-      const activeGroupId =
-        useEpicCanvasStore.getState().canvasByTabId[tabId]?.activePaneId ??
-        null;
-      const placement: ConversationTilePlacement =
-        activeGroupId === null
-          ? { kind: "active-tile" }
-          : { kind: "split", groupId: activeGroupId, position };
-      openNewConversationModal(epicId, tabId, "chat", placement);
-    },
+    run: () => openNewConversationModal(epicId, tabId, "chat", null),
   };
 }
 
@@ -284,17 +246,15 @@ function buildNewTerminalAgentItem(args: {
   return {
     id: "composer:new-terminal-agent",
     label: "New Terminal-interface agent",
-    description: "Compose a new Terminal-interface agent in the active tile.",
+    description:
+      "Compose a new Terminal-interface agent; it lands where the conversation tile-placement setting says.",
     keywords: ["new", "terminal", "agent", "tui"],
     group: "suggested",
     scope: "actions",
     shortcut: null,
     actionId: null,
     subpage: null,
-    run: () =>
-      openNewConversationModal(epicId, tabId, "terminal", {
-        kind: "active-tile",
-      }),
+    run: () => openNewConversationModal(epicId, tabId, "terminal", null),
   };
 }
 

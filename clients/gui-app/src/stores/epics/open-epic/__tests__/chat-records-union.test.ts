@@ -21,19 +21,16 @@ import * as Y from "yjs";
 import type {
   ChatRecordHeadStamp,
   ChatRecordSummaryV11,
+  ChatRecordSummaryV12,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
-import {
-  chatRecordKey,
-  mergeChatRecordRow,
-} from "@/stores/epics/open-epic/chat-record-head";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -84,6 +81,12 @@ function docChatEntry(args: {
   return chat;
 }
 
+/**
+ * An `epic.listChatRecords@1.1` row. `docResident: false` by default because
+ * that is what this builder models - a row the host's chat REGISTRY answered
+ * with. Doc-resident cases override it explicitly, so a fixture never inherits
+ * a home it did not mean to claim.
+ */
 function record(
   overrides: Partial<ChatRecordSummaryV11>,
 ): ChatRecordSummaryV11 {
@@ -102,23 +105,13 @@ function record(
     revision: 1,
     visibility: "private",
     origin: "own",
-    ...overrides,
-  };
-}
-
-function headStamp(
-  overrides: Partial<ChatRecordHeadStamp>,
-): ChatRecordHeadStamp {
-  return {
-    headSha256: "a".repeat(64),
-    throughRecordSeq: 1,
-    publishedAt: 1_000,
+    docResident: false,
     ...overrides,
   };
 }
 
 interface Session {
-  readonly handle: OpenEpicStoreHandle;
+  readonly handle: OpenedStoreForTest;
   readonly callbacks: EpicStreamCallbacks;
   /** Applies a doc mutation the way the host's replicated update would. */
   readonly mutateDoc: (mutate: (chats: Y.Map<unknown>) => void) => void;
@@ -137,11 +130,21 @@ function newSession(seedDoc: (doc: Y.Doc) => void): Session {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: "epic-test",
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   if (captured.value === null) throw new Error("factory not invoked");
   const seed = new Y.Doc();
@@ -219,6 +222,10 @@ describe("chats.byId unions the host's records with the doc projection", () => {
       userId: "user-a",
       hostId: "host-1",
       isTitleEditedByUser: true,
+      // The registry answered for this row, so the home it states is the one
+      // that reaches the projection - the post-sweep steady state is exactly
+      // "the store holds it and the doc does not".
+      docResident: false,
       settings: null,
       archivedAt: null,
     });
@@ -410,10 +417,35 @@ describe("chats.byId unions the host's records with the doc projection", () => {
 
     // Un-aliased even though nothing about the content changed.
     expect(store.getState().chats).not.toBe(store.getState().docChats);
-    // But the row itself - and the id array - are still the SAME references:
-    // only the outer wrapper is new, content identity is preserved throughout.
-    expect(store.getState().chats.byId.both).toBe(beforeRow);
     expect(store.getState().chats.byId.both.title).toBe("Same content");
+    // The row reference DOES move on this first answer, and only on it: the
+    // doc entry claims `docResident: true` (the doc is where that row lives)
+    // and the record STATES the home, so the first record answer for a chat
+    // present in both sources genuinely changes a projected field. Asserting
+    // reference identity across that transition would be asserting that a
+    // change did not happen.
+    expect(beforeRow.docResident).toBe(true);
+    expect(store.getState().chats.byId.both.docResident).toBe(false);
+    const afterFirstAnswer = store.getState().chats.byId.both;
+
+    // What this test is actually for: the churn is ONE-TIME, not per poll. A
+    // second identical answer must re-hand the same row object, or every 20s
+    // refresh would re-render every chat consumer in the epic.
+    store.getState().applyChatRecords(
+      [
+        record({
+          chatId: "both",
+          title: "Same content",
+          ownerUserId: "user-a",
+          originHostId: "host-1",
+          updatedAt: 2,
+          archived: false,
+          archivedAt: null,
+        }),
+      ],
+      null,
+    );
+    expect(store.getState().chats.byId.both).toBe(afterFirstAnswer);
     session.handle.dispose();
   });
 
@@ -1314,289 +1346,152 @@ describe("pending chat creations", () => {
 });
 
 /**
- * The chat record row's publication `head`, riding the same table the two
- * describe blocks above drive - `epic.listChatRecords@1.1` rows through
- * `applyChatRecords`, `host.chatRecords.subscribe@1.3` deltas through
- * `applyChatRecordDelta`. See `chat-record-head.ts` for the two-fact merge
- * these pin from the store's side; `mergeChatRecordRow`'s own unit tests
- * below pin it directly.
+ * The publication HEAD plane, which rides beside the record table rather than
+ * inside it (see `../chat-record-head`).
+ *
+ * These are the cases the record table's own `revision` guard cannot express,
+ * which is the entire reason the head is a separate plane: its ordering fact
+ * is the server-monotonic `publishedAt`, and it moves independently of the
+ * metadata revision in BOTH directions.
  */
-describe("chat record heads", () => {
-  it("a head-only delta at an UNCHANGED revision applies the head without touching `chats`", () => {
-    // Ablation: gate the merge on `revision` alone (drop the independent head
-    // fact) and this delta - a turn published, nothing renamed - is read as a
-    // replay and dropped on the floor.
+describe("chatRecordHeads merges on publishedAt, independently of revision", () => {
+  const HEAD: ChatRecordHeadStamp = {
+    headSha256: "a".repeat(64),
+    throughRecordSeq: 3,
+    publishedAt: 1_000,
+  };
+
+  /** A `@1.2` list row - `record()` plus whatever it says about a head. */
+  function published(
+    overrides: Partial<ChatRecordSummaryV12>,
+  ): ChatRecordSummaryV12 {
+    const { head, ...rest } = overrides;
+    return { ...record(rest), head };
+  }
+
+  const keyOf = (ownerUserId: string, chatId: string): string =>
+    `${ownerUserId}\u001f${chatId}`;
+
+  it("keys a served head on the record identity, not the chat id alone", () => {
     const session = newSession(seedChats([]));
     const store = session.handle.store;
-    const owner = "user-a";
-    const chatId = "c";
+
     store
       .getState()
       .applyChatRecords(
-        [record({ chatId, ownerUserId: owner, revision: 5 })],
+        [
+          published({ chatId: "shared", ownerUserId: "user-a", head: HEAD }),
+          published({ chatId: "shared", ownerUserId: "user-b", head: null }),
+        ],
         null,
       );
-    const before = store.getState().chats;
-    const key = chatRecordKey(owner, chatId);
-    expect(store.getState().chatRecordHeads[key]).toBeUndefined();
 
-    const head = headStamp({ publishedAt: 100 });
-    store.getState().applyChatRecordDelta({
-      kind: "upsert",
-      epicId: "epic-test",
-      record: record({ chatId, ownerUserId: owner, revision: 5, head }),
+    // `chatId` is host-minted and two owners can hold the same one, so keying
+    // on it alone would let one collaborator's row answer for the other's.
+    expect(store.getState().chatRecordHeads).toEqual({
+      [keyOf("user-a", "shared")]: HEAD,
     });
-
-    expect(store.getState().chatRecordHeads[key]).toEqual(head);
-    // The projection reads nothing off a head: `chats` keeps its identity.
-    expect(store.getState().chats).toBe(before);
     session.handle.dispose();
   });
 
-  it("never lets an older head overwrite a newer one, via delta AND via poll, even under a HIGHER revision", () => {
-    // The two facts merge INDEPENDENTLY: a row with fresher metadata can
-    // still carry a stale head (a rename landing before a slower publication
-    // commits), and applying it must not regress the head the tile has
-    // already keyed a read on.
+  it("lands a head-only delta the record table's revision guard drops", () => {
+    // THE case the plane exists for: a turn is published and nothing is
+    // renamed, so the row arrives at an UNCHANGED revision. The record table
+    // correctly rejects it - no metadata is newer - and the head must land
+    // anyway.
     const session = newSession(seedChats([]));
     const store = session.handle.store;
-    const owner = "user-a";
-    const chatId = "c";
-    const key = chatRecordKey(owner, chatId);
-    store.getState().applyChatRecords(
-      [
-        record({
-          chatId,
-          ownerUserId: owner,
-          revision: 1,
-          head: headStamp({ publishedAt: 100 }),
-        }),
-      ],
-      null,
-    );
-    expect(store.getState().chatRecordHeads[key].publishedAt).toBe(100);
+    store
+      .getState()
+      .applyChatRecords([record({ chatId: "c", revision: 4 })], null);
+    const titleBefore = store.getState().chats.byId["c"].title;
 
-    // Delta: newer metadata, OLDER head.
+    const next: ChatRecordHeadStamp = { ...HEAD, publishedAt: 2_000 };
     store.getState().applyChatRecordDelta({
       kind: "upsert",
       epicId: "epic-test",
-      record: record({
-        chatId,
-        ownerUserId: owner,
-        revision: 2,
-        title: "Renamed",
-        head: headStamp({ publishedAt: 50 }),
+      record: published({
+        chatId: "c",
+        revision: 4,
+        title: "ignored",
+        head: next,
       }),
     });
-    expect(store.getState().chats.byId[chatId].title).toBe("Renamed");
-    expect(store.getState().chatRecordHeads[key].publishedAt).toBe(100);
 
-    // Poll: even newer metadata, even older head.
-    store.getState().applyChatRecords(
-      [
-        record({
-          chatId,
-          ownerUserId: owner,
-          revision: 3,
-          title: "Renamed again",
-          head: headStamp({ publishedAt: 10 }),
-        }),
-      ],
-      null,
+    expect(store.getState().chatRecordHeads[keyOf("user-a", "c")]).toEqual(
+      next,
     );
-    expect(store.getState().chats.byId[chatId].title).toBe("Renamed again");
-    expect(store.getState().chatRecordHeads[key].publishedAt).toBe(100);
+    // Ablation: the metadata half must still be governed by `revision`, so the
+    // stale title on that same frame is still refused.
+    expect(store.getState().chats.byId["c"].title).toBe(titleBefore);
     session.handle.dispose();
   });
 
-  it("a poll row with no `head` key, or with an explicit `head: null`, never clears a held head", () => {
-    // Absent is an older peer's row (`@1.0`-`@1.2`) that never carried the
-    // field; `null` is a host's positive "no publication to point at". A held
-    // stamp proves a publication happened and is never undone short of the
-    // chat's removal - neither absence may retract it.
+  it("never clears a held head with a row that states none", () => {
+    // Absent (an older peer's row) and `null` (a host's "no publication") are
+    // both silence, not a retraction. A rename racing a publication would
+    // otherwise send the tile back to an unkeyed read.
     const session = newSession(seedChats([]));
     const store = session.handle.store;
-    const owner = "user-a";
-    const chatId = "c";
-    const key = chatRecordKey(owner, chatId);
-    store.getState().applyChatRecords(
-      [
-        record({
-          chatId,
-          ownerUserId: owner,
-          revision: 1,
-          head: headStamp({ publishedAt: 100 }),
-        }),
-      ],
-      null,
-    );
+    store
+      .getState()
+      .applyChatRecords([published({ chatId: "c", head: HEAD })], null);
 
-    // No `head` key at all.
-    store.getState().applyChatRecords(
-      [
-        record({
-          chatId,
-          ownerUserId: owner,
-          revision: 2,
-          title: "No head key",
-        }),
-      ],
-      null,
-    );
-    expect(store.getState().chatRecordHeads[key].publishedAt).toBe(100);
-    expect(store.getState().chats.byId[chatId].title).toBe("No head key");
-
-    // Explicit `head: null`.
-    store.getState().applyChatRecords(
-      [
-        record({
-          chatId,
-          ownerUserId: owner,
-          revision: 3,
-          title: "Explicit null",
-          head: null,
-        }),
-      ],
-      null,
-    );
-    expect(store.getState().chatRecordHeads[key].publishedAt).toBe(100);
-    expect(store.getState().chats.byId[chatId].title).toBe("Explicit null");
-    session.handle.dispose();
-  });
-
-  it("a delta with the same revision and the same head is a no-op", () => {
-    const session = newSession(seedChats([]));
-    const store = session.handle.store;
-    const owner = "user-a";
-    const chatId = "c";
-    const head = headStamp({ publishedAt: 100 });
     store
       .getState()
       .applyChatRecords(
-        [record({ chatId, ownerUserId: owner, revision: 1, head })],
+        [published({ chatId: "c", revision: 2, head: null })],
         null,
       );
-    const headsBefore = store.getState().chatRecordHeads;
+    store
+      .getState()
+      .applyChatRecords([record({ chatId: "c", revision: 3 })], null);
 
-    store.getState().applyChatRecordDelta({
-      kind: "upsert",
-      epicId: "epic-test",
-      record: record({ chatId, ownerUserId: owner, revision: 1, head }),
-    });
-
-    expect(store.getState().chatRecordHeads).toBe(headsBefore);
+    expect(store.getState().chatRecordHeads[keyOf("user-a", "c")]).toEqual(
+      HEAD,
+    );
     session.handle.dispose();
   });
 
-  it("keeps a collaborator's head in `chatRecordHeads`, under its own key, though the row is filtered from `chats`", () => {
-    // Built over EVERY retained row regardless of owner - the owner filter
-    // that shapes `chats.byId` is a display rule the head has no part in.
-    signedInAs("user-a");
+  it("refuses a head that does not advance publishedAt, and keeps identity", () => {
     const session = newSession(seedChats([]));
     const store = session.handle.store;
-    const head = headStamp({ publishedAt: 200 });
+    store
+      .getState()
+      .applyChatRecords([published({ chatId: "c", head: HEAD })], null);
+    const held = store.getState().chatRecordHeads;
+
     store.getState().applyChatRecordDelta({
       kind: "upsert",
       epicId: "epic-test",
-      record: record({
-        chatId: "theirs",
-        ownerUserId: "user-b",
-        originHostId: "host-2",
-        origin: "foreign",
-        visibility: "task",
-        revision: 1,
-        head,
+      record: published({
+        chatId: "c",
+        revision: 9,
+        head: { ...HEAD, headSha256: "b".repeat(64), publishedAt: 500 },
       }),
     });
 
-    expect(store.getState().chats.allIds).toEqual([]);
-    const key = chatRecordKey("user-b", "theirs");
-    expect(store.getState().chatRecordHeads[key]).toEqual(head);
+    // Same TABLE object, so nothing keyed on a stamp re-renders - which is
+    // what makes the 20s poll free while an epic is quiet.
+    expect(store.getState().chatRecordHeads).toBe(held);
     session.handle.dispose();
   });
 
-  it("a `remove` delta drops the head along with the row", () => {
+  it("drops the head on a remove, which is the only thing that retracts one", () => {
     const session = newSession(seedChats([]));
     const store = session.handle.store;
-    const owner = "user-a";
-    const chatId = "gone";
-    const key = chatRecordKey(owner, chatId);
-    store.getState().applyChatRecords(
-      [
-        record({
-          chatId,
-          ownerUserId: owner,
-          revision: 1,
-          head: headStamp({ publishedAt: 100 }),
-        }),
-      ],
-      null,
-    );
-    expect(store.getState().chatRecordHeads[key]).toBeDefined();
+    store
+      .getState()
+      .applyChatRecords([published({ chatId: "c", head: HEAD })], null);
 
     store.getState().applyChatRecordDelta({
       kind: "remove",
       epicId: "epic-test",
-      chatId,
+      chatId: "c",
       reason: "deleted",
     });
-    expect(store.getState().chatRecordHeads[key]).toBeUndefined();
+
+    expect(store.getState().chatRecordHeads).toEqual({});
     session.handle.dispose();
-  });
-});
-
-describe("mergeChatRecordRow", () => {
-  it("keeps the SAME head object when metadata advances but the head does not", () => {
-    const head = headStamp({ publishedAt: 100 });
-    const held = record({ chatId: "c", revision: 1, head });
-    const incoming = record({
-      chatId: "c",
-      revision: 2,
-      title: "Renamed",
-      head,
-    });
-    const merged = mergeChatRecordRow(held, incoming);
-    expect(merged).not.toBeNull();
-    expect(merged?.head).toBe(head);
-    expect(merged?.title).toBe("Renamed");
-  });
-
-  it("returns null - a no-op - when neither metadata nor head advances", () => {
-    const held = record({
-      chatId: "c",
-      revision: 2,
-      head: headStamp({ publishedAt: 100 }),
-    });
-    const incoming = record({
-      chatId: "c",
-      revision: 1,
-      head: headStamp({ publishedAt: 50 }),
-    });
-    expect(mergeChatRecordRow(held, incoming)).toBeNull();
-  });
-
-  it("takes `incoming` outright when nothing is held yet", () => {
-    const incoming = record({ chatId: "c", revision: 1 });
-    expect(mergeChatRecordRow(undefined, incoming)).toBe(incoming);
-  });
-
-  it("advances the head alone, keeping the held metadata verbatim, when only the head is newer", () => {
-    const held = record({
-      chatId: "c",
-      revision: 5,
-      title: "Held title",
-      head: headStamp({ publishedAt: 10 }),
-    });
-    const newHead = headStamp({ publishedAt: 20 });
-    const incoming = record({
-      chatId: "c",
-      revision: 5,
-      title: "Ignored - metadata does not advance",
-      head: newHead,
-    });
-    const merged = mergeChatRecordRow(held, incoming);
-    expect(merged).not.toBeNull();
-    expect(merged?.title).toBe("Held title");
-    expect(merged?.head).toBe(newHead);
   });
 });

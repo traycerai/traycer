@@ -43,7 +43,7 @@ describe("TeardownForceDeleteDialog", () => {
     );
     screen.getByRole("dialog", { name: "Delete worktree tidy-seal?" });
     screen.getByText(
-      "It's still held by the following. Deleting will stop them first.",
+      "Anything working in this worktree when the delete runs will be stopped.",
     );
     expect(
       screen.getByTestId("teardown-disclosure-working").textContent,

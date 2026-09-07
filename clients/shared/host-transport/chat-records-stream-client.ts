@@ -3,7 +3,7 @@ import {
   hostChatRecordsSubscribeServerFrameSchemaV12,
   hostChatRecordsSubscribeServerFrameSchemaV13,
   type ChatRecordRemovalReason,
-  type ChatRecordSummaryV11,
+  type ChatRecordSummaryStreamV13,
   type HostChatRecordsSubscribeServerFrameV13,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
@@ -36,13 +36,17 @@ export type ChatRecordDelta =
        * the two are equal, so carrying only one of them here removes the
        * possibility of a consumer guarding on the copy the host did not mean.
        *
-       * The `@1.1` row shape, so a `@1.3` session's `head` (the chat's cloud
+       * The `@1.3` STREAM row, so a `@1.3` session's `head` (the chat's cloud
        * publication stamp, ordered by its own `publishedAt`) reaches the
        * consumer. On an older negotiated minor the key is simply absent - the
        * host never sent it and the older schema would strip it anyway - which
        * consumers collapse with `head ?? null`.
+       *
+       * NOT the list's `@1.2` row: that one also carries `docResident`, which
+       * a delta may not state (see `chatRecordSummaryStreamV13Schema`). The
+       * consumer seeds that field from what it already holds.
        */
-      readonly record: ChatRecordSummaryV11;
+      readonly record: ChatRecordSummaryStreamV13;
     }
   | {
       readonly kind: "remove";

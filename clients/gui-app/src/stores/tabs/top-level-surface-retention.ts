@@ -1,3 +1,8 @@
+import {
+  DESKTOP_RETENTION_PROFILE,
+  getRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
+
 /**
  * The global top-level-surface MRU/retention policy, shared by
  * `TopLevelTabHost`'s keep-alive layer and Ticket 21 slice 2's stable
@@ -10,7 +15,14 @@
  * `availableKeys`/`activeKeys` from their own reactive inputs and persisting
  * `recency` between calls.
  */
-export const MAX_RETAINED_TOP_LEVEL_SURFACES = 5;
+/**
+ * The DESKTOP cap, kept as a named constant for the suites that count against
+ * it. The live value is the active retention profile's, read per recompute
+ * (`retainedTopLevelSurfaceKeys`), so the phone runs a smaller window without
+ * a platform branch here.
+ */
+export const MAX_RETAINED_TOP_LEVEL_SURFACES =
+  DESKTOP_RETENTION_PROFILE.retainedTopLevelSurfaces;
 
 /**
  * Advances the recency order: every currently active key moves to the
@@ -44,6 +56,8 @@ export function retainedTopLevelSurfaceKeys(
     ...availableActiveKeys,
     ...recency.filter((key) => available.has(key) && !activeKeys.includes(key)),
   ];
-  const retained = new Set(ordered.slice(0, MAX_RETAINED_TOP_LEVEL_SURFACES));
+  const retained = new Set(
+    ordered.slice(0, getRetentionProfile().retainedTopLevelSurfaces),
+  );
   return availableKeys.filter((key) => retained.has(key));
 }

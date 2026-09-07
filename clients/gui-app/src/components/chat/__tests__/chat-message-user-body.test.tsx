@@ -31,16 +31,24 @@ import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
-const attachmentMocks = vi.hoisted(() => ({
-  fetcher: vi.fn((_hash: string, _signal: AbortSignal) =>
+const attachmentMocks = vi.hoisted(() => {
+  const fetch = vi.fn((_hash: string, _signal: AbortSignal) =>
     Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), mediaType: null }),
-  ),
-  hasBytes: vi.fn(() => true),
-  readChatBytes: vi.fn(
-    (_hash: string): Promise<Uint8Array<ArrayBuffer> | null> =>
-      Promise.resolve(new Uint8Array([1, 2, 3])),
-  ),
-}));
+  );
+  return {
+    fetch,
+    // Built ONCE, not per call. These stand in for hooks that memoize, and
+    // the blob-url effect takes the fetcher as a dependency - a factory
+    // returning a fresh object each render re-runs that effect forever.
+    epicFetcher: { scopeKey: "test-epic-scope", fetch },
+    chatFetcher: { scopeKey: "test-chat-scope", fetch },
+    hasBytes: vi.fn(() => true),
+    readChatBytes: vi.fn(
+      (_hash: string): Promise<Uint8Array<ArrayBuffer> | null> =>
+        Promise.resolve(new Uint8Array([1, 2, 3])),
+    ),
+  };
+});
 const composerPickerMocks = vi.hoisted(() => ({
   useComposerPickerItems: vi.fn(),
 }));
@@ -131,7 +139,7 @@ vi.mock(
     const actual = await importOriginal();
     return {
       ...actual,
-      useEpicImageFetcher: () => attachmentMocks.fetcher,
+      useEpicImageFetcher: () => attachmentMocks.epicFetcher,
       useEpicAttachmentBytesPresence: () => attachmentMocks.hasBytes,
     };
   },
@@ -143,7 +151,7 @@ vi.mock(
     const actual = await importOriginal();
     return {
       ...actual,
-      useChatImageFetcher: () => attachmentMocks.fetcher,
+      useChatImageFetcher: () => attachmentMocks.chatFetcher,
       useChatAttachmentByteReader: () => attachmentMocks.readChatBytes,
     };
   },
@@ -270,8 +278,8 @@ describe("<UserMessageBody /> agent messages", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
-    attachmentMocks.fetcher.mockReset();
-    attachmentMocks.fetcher.mockImplementation((_hash, _signal) =>
+    attachmentMocks.fetch.mockReset();
+    attachmentMocks.fetch.mockImplementation((_hash, _signal) =>
       Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), mediaType: null }),
     );
     attachmentMocks.hasBytes.mockReset();
@@ -855,19 +863,27 @@ describe("<UserMessageBody /> agent messages", () => {
       />,
     );
 
-    expect(screen.getByText("Received message")).toBeTruthy();
+    // The direction label is for assistive tech only: the icon plus "from"
+    // already say it, and the visible words were crowding the sender name out
+    // of narrow headers.
+    expect(screen.getByText("Received message").className).toContain("sr-only");
+    expect(screen.getByText("from")).toBeTruthy();
+    expect(screen.queryByText("from agent")).toBeNull();
     expect(screen.getByText("Review Agent")).toBeTruthy();
     expect(screen.getByText(/Investigate this failure/)).toBeTruthy();
     expect(screen.queryByText("Message")).toBeNull();
-    // The badge sits in the always-visible header next to the sender link, so
-    // it's already present before the card is expanded.
-    expect(screen.getByText("reply expected")).toBeTruthy();
+    // Reply-expected is a compact icon in the always-visible header; the
+    // spelled-out line only appears once the card is expanded.
+    expect(screen.getByRole("img", { name: "Reply expected" })).toBeTruthy();
+    expect(screen.queryByText("Reply expected")).toBeNull();
+    expect(screen.queryByText("reply expected")).toBeNull();
     expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /Received message/ }));
 
     expect(screen.getByRole("button", { name: "Review Agent" })).toBeTruthy();
-    expect(screen.getByText("reply expected")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Reply expected" })).toBeTruthy();
+    expect(screen.getByText("Reply expected")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
     expect(screen.queryByText("Message")).toBeNull();
     expect(

@@ -18,6 +18,7 @@ import {
   assistantRowTurnKey,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
+  importedChatMarkerRowId,
   isTurnDecoratingEvent,
   projectTranscriptRows,
   queueSteerRowId,
@@ -29,6 +30,10 @@ import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-tr
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
+import type {
+  ProtectedBytes,
+  ProtectedRegionKind,
+} from "@traycer-clients/shared/replica-runtime";
 
 /**
  * # The client half of the windowed transcript
@@ -351,6 +356,19 @@ export interface TranscriptWindow {
    * fresh span demotes its shared records to stale-exclusive and this figure
    * genuinely drops, which is what lets eviction make progress post-rebase
    * when the carry holds every fresh span's records too.
+   *
+   * PLUS the live tail - records the index has not placed in a span yet. Those
+   * used to sit outside this figure, and a session that only sends never seats
+   * a span, so the live set could grow while the budget still read zero: that
+   * is how a huge in-flight turn failed to evict the cold scrollback it was
+   * competing with. They are charged so eviction of *unprotected spans* can
+   * make room; the live records themselves stay, having no ordinal by which
+   * range hydration could recover them.
+   *
+   * The two terms cannot double-count. A record a fresh span references is
+   * removed from the live set by {@link pruneSupersededLiveRecords} - that
+   * filter is what keeps `live` and `span-referenced` disjoint, and it is the
+   * reason this figure can be a plain sum. See {@link chargedWindowBytes}.
    */
   readonly hydratedBytes: number;
   /**
@@ -452,8 +470,13 @@ export interface OrdinalRange {
  * transcript, so this has to be well under that while still being large enough
  * that ordinary scrolling does not thrash: a reader paging back through a long
  * chat should find the rows they just left still hydrated.
+ *
+ * Defined once in `budget-limits.ts` so the process-wide pool and this
+ * per-window unit cannot drift. Imported as well as re-exported: this module
+ * reads it itself, and a bare `export ... from` binds nothing in local scope.
  */
-export const TRANSCRIPT_WINDOW_MAX_BYTES = 8 * 1024 * 1024;
+export { TRANSCRIPT_WINDOW_MAX_BYTES } from "@/stores/replica-memory/budget-limits";
+import { TRANSCRIPT_WINDOW_MAX_BYTES } from "@/stores/replica-memory/budget-limits";
 
 /**
  * How large a span may grow by absorbing the span NEXT to it.
@@ -731,6 +754,90 @@ function freshTierBytes(
 }
 
 /**
+ * How much an in-place rewrite moved the LIVE term of
+ * {@link TranscriptWindow.hydratedBytes} - the symmetric half of
+ * `rewriteWindowMessage`'s `freshReferenced` adjustment, and the only thing
+ * that maintains this term.
+ *
+ * A live-only record (no ledger entry) skips that fresh adjustment entirely
+ * while still being rewritten, so without this the figure would go on
+ * describing the pre-rewrite body. `updateWindowMessage` reaches exactly that
+ * case by design - its contract is "wherever the window holds it, live or
+ * hydrated" - and an image resolving on the in-flight row is the everyday
+ * instance.
+ *
+ * Zero for a `deferred` charge, for the same reason the fresh term is
+ * unmoved by one: that charge leaves the figure untouched BY CONSTRUCTION, or
+ * a streaming row's growth starts tripping the eviction gate the deferred
+ * charge exists to keep it out of.
+ *
+ * Both copies are measured, unlike the ledger path, which gets the old figure
+ * free from `entry.bytes`. A live record has no ledger entry to cache one -
+ * that is what live MEANS here - so a `now` charge pays one extra measure of a
+ * single record, never of the set.
+ */
+function liveRewriteByteDelta(
+  charge: "now" | "deferred",
+  before: readonly Message[],
+  after: readonly Message[],
+  index: number,
+): number {
+  if (charge !== "now" || index < 0) return 0;
+  const previous = before[index];
+  const next = after[index];
+  if (next === previous) return 0;
+  return recordByteLength(next) - recordByteLength(previous);
+}
+
+function recordsByteLength(
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+): number {
+  let bytes = 0;
+  for (const message of messages) bytes += recordByteLength(message);
+  for (const event of events) bytes += recordByteLength(event);
+  return bytes;
+}
+
+/**
+ * The window's full charge: the fresh tier PLUS the live tail.
+ *
+ * A plain sum, and it is the disjointness that makes it one. A record a fresh
+ * span references is dropped from the live set by
+ * {@link pruneSupersededLiveRecords}, so no record is ever in both terms and
+ * neither term needs to exclude the other. That prune is the load-bearing
+ * mechanism here - not a structural accident - which is why it carries its own
+ * pin rather than a second filter being added on this side to mask it.
+ *
+ * The live term is measured, not looked up: live records have no ledger entry
+ * to carry a cached figure, precisely because nothing has placed them yet.
+ */
+function chargedWindowBytes(
+  ledger: RecordLedger,
+  spans: readonly HydratedSpan[],
+  liveMessages: readonly Message[],
+  liveEvents: readonly ChatEvent[],
+): number {
+  return (
+    freshTierBytes(ledger, spans) + recordsByteLength(liveMessages, liveEvents)
+  );
+}
+
+/**
+ * What the window currently retains, in bytes - the figure
+ * {@link evictTranscriptWindowToBudget} reads, and the one a process-wide
+ * accountant should settle.
+ */
+export function transcriptWindowChargedBytes(window: TranscriptWindow): number {
+  return chargedWindowBytes(
+    window.records,
+    window.spans,
+    window.liveMessages,
+    window.liveEvents,
+  );
+}
+
+/**
  * The stale tier's charge against remaining headroom: stale-EXCLUSIVE record
  * bytes (a record the fresh tier also references is already inside
  * {@link TranscriptWindow.hydratedBytes} - charging it here would bill the
@@ -967,8 +1074,9 @@ export function spanChargeBytes(
 /**
  * Fold one record set's BACKABLE identities into `into` - the derived id
  * shapes every tier produces the same way: a message backs the row carrying
- * its id, an event backs both its transcript row and its forked-chat-link
- * row, and a stopped turn's event backs that turn's assistant row.
+ * its id, an event backs its transcript row, its forked-chat-link row and its
+ * imported-chat-marker row, and a stopped turn's event backs that turn's
+ * assistant row.
  *
  * Lives HERE (not in `transcript-list-rows.ts`, which imports it) because the
  * draws relation above and both tiers' backing channels consume the same fold
@@ -984,6 +1092,7 @@ export function addRecordBackedRowIds(
   for (const event of events) {
     into.add(chatTranscriptEventRowId(event.eventId));
     into.add(forkedChatLinkRowId(event.eventId));
+    into.add(importedChatMarkerRowId(event.eventId));
     if (event.type === "turn.stopped" && event.turnId !== null) {
       into.add(assistantRowId(event.turnId));
     }
@@ -1038,13 +1147,29 @@ export function appendLiveRecords(
   // prune never runs and the row-less events would still accumulate unbounded.
   // This is the append the cap actually has to hold.
   const appendedEvents = [...window.liveEvents, ...events];
+  const overflow = appendedEvents.length - MAX_LIVE_EVENTS;
+  const trimmed = overflow > 0 ? appendedEvents.slice(0, overflow) : [];
+  const liveEvents =
+    overflow > 0 ? appendedEvents.slice(overflow) : appendedEvents;
+  const liveMessages = [...window.liveMessages, ...messages];
   return {
     ...window,
-    liveMessages: [...window.liveMessages, ...messages],
-    liveEvents:
-      appendedEvents.length > MAX_LIVE_EVENTS
-        ? appendedEvents.slice(appendedEvents.length - MAX_LIVE_EVENTS)
-        : appendedEvents,
+    liveMessages,
+    liveEvents,
+    // Delta of the NEW records minus any events the cap just dropped.
+    // Re-measuring the whole live set here would stringify every retained
+    // event on each append - quadratic in the cap. This path does not
+    // populate `unsettledByteMessageIds`, so `settleWindowBytes` will not
+    // remeasure it; the trim's bytes have to leave here.
+    //
+    // Only appended records are measured, and an appended record is by
+    // definition not in any span (the filters above reject anything the
+    // ledger already holds), so this delta cannot double-count against the
+    // fresh term.
+    hydratedBytes:
+      window.hydratedBytes +
+      recordsByteLength(messages, events) -
+      recordsByteLength([], trimmed),
     clock: window.clock + 1,
   };
 }
@@ -1097,8 +1222,10 @@ function pruneSupersededLiveRecords(
   // their siblings are transcript-level signals that materialize no row, so no
   // span will ever name them and no amount of scrolling will evict them. On a
   // tab left connected across many sends they accumulate for the life of the
-  // session - and, because `hydratedBytes` is `totalBytes(spans)`, they are
-  // not charged to the window budget either, so nothing else notices.
+  // session. They ARE charged to `hydratedBytes` - the live tail is a term of
+  // it - so a large live set evicts unprotected spans rather than going
+  // unnoticed; the events themselves stay until this cap, because a row-less
+  // signal has no ordinal by which range hydration could bring it back.
   //
   // The tail is what has any chance of being live-relevant, so the cap keeps
   // the NEWEST. Dropping an older one is safe rather than lossy: anything that
@@ -1114,7 +1241,22 @@ function pruneSupersededLiveRecords(
   ) {
     return window;
   }
-  return { ...window, liveMessages, liveEvents };
+  // THE disjointness seam. Records that just left the live set did so because
+  // a fresh span now references them, so they move from this figure's live
+  // term into its fresh term - and a full recompute is what makes that a
+  // hand-off rather than a double-count. Nothing else in the file re-derives
+  // the figure at the moment membership crosses tiers.
+  return {
+    ...window,
+    liveMessages,
+    liveEvents,
+    hydratedBytes: chargedWindowBytes(
+      window.records,
+      window.spans,
+      liveMessages,
+      liveEvents,
+    ),
+  };
 }
 
 function assistantRenderBodyEqual(
@@ -1490,9 +1632,19 @@ export function mapWindowMessages(
     ...window,
     records,
     liveMessages: liveChanged ? liveMessages : window.liveMessages,
-    hydratedBytes: ledgerChanged
-      ? freshTierBytes(records, window.spans)
-      : window.hydratedBytes,
+    // `liveChanged` counts here, not just `ledgerChanged`: the live tail is a
+    // TERM of this figure, so a remap that rewrote only live rows still moved
+    // it. Gating on the ledger alone would leave the figure describing the
+    // pre-remap live bodies.
+    hydratedBytes:
+      ledgerChanged || liveChanged
+        ? chargedWindowBytes(
+            records,
+            window.spans,
+            liveChanged ? liveMessages : window.liveMessages,
+            window.liveEvents,
+          )
+        : window.hydratedBytes,
   });
 }
 
@@ -1508,19 +1660,41 @@ export function mapWindowMessages(
  */
 export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
   if (window.unsettledByteMessageIds.length === 0) return window;
-  let changed = false;
+  let ledgerChanged = false;
+  let liveChanged = false;
   const nextEntries = new Map(window.records.messages);
   for (const id of window.unsettledByteMessageIds) {
     const entry = nextEntries.get(id);
-    if (entry === undefined) continue;
+    if (entry === undefined) {
+      // A LIVE-only record. There is no ledger entry to re-measure into - the
+      // live term is derived at the recompute below, never stored per record -
+      // so marking the window dirty IS its settle.
+      //
+      // A bare `continue` stood here, on the premise that a live-only record
+      // has no bytes to settle. That was TRUE while `hydratedBytes` was the
+      // span term alone. The merged definition killed it: the live tail is a
+      // term of the figure now, and a row that grew in place across a turn's
+      // deferred charges is settled HERE or nowhere - which is exactly the
+      // in-flight turn the budget exists to notice. Restoring the
+      // short-circuit as an obvious optimization reopens that hole silently,
+      // because nothing else re-derives the live term on the streaming path.
+      if (window.liveMessages.some((message) => message.messageId === id)) {
+        liveChanged = true;
+      }
+      continue;
+    }
     const bytes = recordByteLength(entry.record);
     if (bytes === entry.bytes) continue;
-    changed = true;
+    ledgerChanged = true;
     nextEntries.set(id, { ...entry, bytes });
   }
   // No revision bump: a settle changes charges, never membership, serve
   // identity, or anything a (spans, revision)-keyed memo reads.
-  const records = changed
+  //
+  // Keyed on the LEDGER's own flag, so a live-only settle leaves the ledger
+  // object identical - the live term is not in it, and rebuilding the map for
+  // a change it does not hold would churn every consumer keyed on it.
+  const records = ledgerChanged
     ? {
         messages: nextEntries,
         events: window.records.events,
@@ -1533,9 +1707,15 @@ export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
   return boundStaleTierToBudget({
     ...window,
     records,
-    hydratedBytes: changed
-      ? freshTierBytes(records, window.spans)
-      : window.hydratedBytes,
+    hydratedBytes:
+      ledgerChanged || liveChanged
+        ? chargedWindowBytes(
+            records,
+            window.spans,
+            window.liveMessages,
+            window.liveEvents,
+          )
+        : window.hydratedBytes,
     unsettledByteMessageIds: [],
   });
 }
@@ -1659,15 +1839,27 @@ function rewriteWindowMessage(
           if (next !== message) witnesses?.carryRewrittenCopy(message, next);
           return next;
         });
+  hydratedBytes += liveRewriteByteDelta(
+    charge,
+    window.liveMessages,
+    liveMessages,
+    liveIndex,
+  );
   const next: TranscriptWindow = {
     ...window,
     records,
     liveMessages,
     hydratedBytes,
+    // A LIVE-only record (`entry === undefined`) is marked too. It used to be
+    // excluded here, correctly: with `hydratedBytes` defined as the span term
+    // alone, such a record contributed nothing and marking it bought a settle
+    // that had nothing to measure. Under the merged definition it contributes
+    // its whole body, and this mark is the ONLY thing that carries a streaming
+    // row's in-place growth to `settleWindowBytes` - the deferred charge
+    // deliberately leaves the figure unmoved, so without the mark that growth
+    // is never charged at all.
     unsettledByteMessageIds:
-      charge === "now" ||
-      entry === undefined ||
-      window.unsettledByteMessageIds.includes(messageId)
+      charge === "now" || window.unsettledByteMessageIds.includes(messageId)
         ? window.unsettledByteMessageIds
         : [...window.unsettledByteMessageIds, messageId],
     clock,
@@ -2564,7 +2756,12 @@ function seatSnapshotTailSpan(input: {
         ...completeBase,
         records,
         spans,
-        hydratedBytes: freshTierBytes(records, spans),
+        hydratedBytes: chargedWindowBytes(
+          records,
+          spans,
+          completeBase.liveMessages,
+          completeBase.liveEvents,
+        ),
       },
       servedAssistantTurns(
         declaredCompleteTailRowIds(tail),
@@ -2682,7 +2879,12 @@ function boundWindowToRowCount(
     skeleton,
     spans,
     staleSpans,
-    hydratedBytes: freshTierBytes(window.records, spans),
+    hydratedBytes: chargedWindowBytes(
+      window.records,
+      spans,
+      window.liveMessages,
+      window.liveEvents,
+    ),
     skeletonStreamCoveredThrough: Math.min(
       window.skeletonStreamCoveredThrough,
       rowCount,
@@ -2711,7 +2913,12 @@ function dropSpansOverlappingFrom(
   return pruneUnreferencedRecords({
     ...window,
     spans: kept,
-    hydratedBytes: freshTierBytes(window.records, kept),
+    hydratedBytes: chargedWindowBytes(
+      window.records,
+      kept,
+      window.liveMessages,
+      window.liveEvents,
+    ),
   });
 }
 
@@ -3104,7 +3311,12 @@ function reconcileSpansWithSkeleton(
     pruneUnreferencedRecords({
       ...window,
       spans: kept,
-      hydratedBytes: freshTierBytes(window.records, kept),
+      hydratedBytes: chargedWindowBytes(
+        window.records,
+        kept,
+        window.liveMessages,
+        window.liveEvents,
+      ),
     }),
     adoptedAssistantTurns,
   );
@@ -3947,24 +4159,30 @@ export function applyIndexChange(
  * sibling slice holding the same turn's records is the case where it is not.
  * See {@link recordSharingOrdinals}.
  *
- * ## Why the echo test alone, when the store also asks whether the copy is HELD
+ * ## The echo test alone, on both halves of the decision
  *
- * The store gates its half of this decision - whether to supersede in-flight
- * hydration - on {@link holdsActiveTurnAssistantMessage} as well, because an
- * unheld copy is not being rewritten by the deltas and an answer generated
- * before them carries blocks the client can never recover. That conjunct is
- * absent here, and the two still agree, for a reason worth stating rather than
- * rediscovering: this half is a NO-OP whenever the conjunct would differ.
- * {@link dropSpansForUpdatedOrdinals} drops by ordinal containment, every
- * ordinal it is given names an `assistant:` row of the active turn (the entry
- * test in {@link isActiveTurnStreamingEcho}, widened along the same axis by
- * {@link recordSharingOrdinals}), and a span covering such an ordinal was
- * served the records backing it - so "no span holds the turn's assistant
- * message" already implies "no span contains one of these ordinals", and there
- * is nothing for the skip to keep. Adding the scan here would buy no
- * behavioural change and would put an O(records held) walk on the per-token
- * path, which is exactly what the store's own `outstandingHydrationRequests`
- * gate exists to avoid.
+ * The store's half - whether to supersede in-flight hydration - asks exactly
+ * this same question and nothing more. It once carried a second conjunct,
+ * {@link holdsActiveTurnAssistantMessage}, on the reasoning that an unheld copy
+ * is not being rewritten so an answer generated before those deltas must be
+ * discarded. That conjunct was the starvation loop it was meant to prevent:
+ * unheld is precisely the state each supersede re-created, so every echo of a
+ * long turn discarded the answer for its own row and the row never hydrated.
+ * The store now supersedes on the echo test alone and repairs the trailing body
+ * a different way - see `chat-session-store`'s dropped-write mark, which asks
+ * whether the ANSWER predates a write this client dropped rather than whether a
+ * copy happens to be held at fold time.
+ *
+ * Holding is still what decides whether such a write was dropped at all, so the
+ * scan survives in the store on that path. It is deliberately absent HERE, and
+ * would be a no-op if added: {@link dropSpansForUpdatedOrdinals} drops by
+ * ordinal containment, every ordinal it is given names an `assistant:` row of
+ * the active turn (the entry test in {@link isActiveTurnStreamingEcho}, widened
+ * along the same axis by {@link recordSharingOrdinals}), and a span covering
+ * such an ordinal was served the records backing it - so "no span holds the
+ * turn's assistant message" already implies "no span contains one of these
+ * ordinals". Adding the scan would buy no behavioural change and would put an
+ * O(records held) walk on the per-token path.
  */
 function reconcileUpdatedBodies(
   window: TranscriptWindow,
@@ -3980,6 +4198,39 @@ function reconcileUpdatedBodies(
   return dropSpansForUpdatedOrdinals(
     window,
     recordSharingOrdinals(window, invalidated),
+  );
+}
+
+/**
+ * Retire the fresh spans holding `ordinals` into the stale tier so the planner
+ * asks for those rows once more - the catch-up behind the streaming-echo
+ * exemption.
+ *
+ * The exemption lets a `range` answer for the active turn's row seat even when
+ * the client held no copy of that turn while the answer was in flight. Such an
+ * answer was sliced BEFORE writes this client dropped (dropped because nothing
+ * held the row to apply them to), so the body it seats can trail the host by
+ * exactly those blocks - and nothing re-asks for a row that is hydrated. So the
+ * store retires the span here: the body stays renderable from the stale tier,
+ * the ordinal reads as a gap again, and the request the planner then sends is
+ * sliced after every write the first one missed.
+ *
+ * Which answers get this treatment is the store's decision and rests on the
+ * ANSWER's provenance, never on what happens to be held when it lands - see the
+ * dropped-write mark in `chat-session-store`. Seating is also what ends the
+ * condition: once any span or the ledger holds the turn's records, later deltas
+ * are applied rather than dropped, so no further write goes missing.
+ *
+ * The same transition a non-echo `updated` performs - deliberately, so this
+ * introduces no second way for a span to leave the fresh tier.
+ */
+export function refreshSeatedRows(
+  window: TranscriptWindow,
+  ordinals: readonly number[],
+): TranscriptWindow {
+  return dropSpansForUpdatedOrdinals(
+    window,
+    recordSharingOrdinals(window, ordinals),
   );
 }
 
@@ -4054,7 +4305,12 @@ function dropSpansForUpdatedOrdinals(
     }
   }
   if (dropped.length === 0) return window;
-  const hydratedBytes = freshTierBytes(window.records, kept);
+  const hydratedBytes = chargedWindowBytes(
+    window.records,
+    kept,
+    window.liveMessages,
+    window.liveEvents,
+  );
   return pruneUnreferencedRecords({
     ...window,
     spans: kept,
@@ -4103,11 +4359,14 @@ function heldMessageCopy(
  * Does the window hold the active turn's assistant message ANYWHERE - live,
  * fresh span, or stale span?
  *
- * The precondition for skipping the in-flight supersede on a streaming echo:
- * the skip is sound because the delta stream rewrites the held copy in place,
- * and a copy that is not held is not being rewritten - deltas for it are
- * dropped, so an answer generated before them carries blocks the client can
- * never recover and MUST be discarded and re-asked.
+ * Not a precondition for the streaming-echo exemption - that gate was the
+ * starvation loop and is gone. What this answers now is whether a delta the
+ * echo reports was APPLIED or DROPPED: the stream rewrites a held copy in
+ * place, while a write for a row nothing holds has nowhere to land. So the
+ * store reads it to decide whether a dropped write happened at all, and an
+ * answer sliced before one owes a catch-up (see `chat-session-store`'s
+ * dropped-write mark). Because it counts the stale tier too, one seat is enough
+ * to end the condition - a demoted body still receives the deltas that follow.
  *
  * O(records the window holds); the caller gates it on there being an
  * outstanding request at all, so it never runs on the bare per-token path.
@@ -4117,15 +4376,117 @@ export function holdsActiveTurnAssistantMessage(
   activeTurnId: string | null,
 ): boolean {
   if (activeTurnId === null) return false;
-  const matches = (message: Message): boolean =>
-    message.role === "assistant" && assistantTurnKey(message) === activeTurnId;
-  if (window.liveMessages.some(matches)) return true;
+  if (window.liveMessages.some(assistantMessageOfTurn(activeTurnId))) {
+    return true;
+  }
   // The ledger IS the span tiers' holdings, fresh and stale alike.
   for (const entry of window.records.messages.values()) {
-    if (matches(entry.record)) return true;
+    if (assistantMessageOfTurn(activeTurnId)(entry.record)) return true;
   }
   return false;
 }
+
+/**
+ * Will this range answer SEAT the active turn's own assistant records?
+ *
+ * The question the store asks of an answer that predates a dropped write, and
+ * it is about RECORDS rather than ordinals deliberately. A dropped write can
+ * only have staled the turn it was written for, so a scrollback answer from the
+ * same era is current and must not be re-fetched. Conversely a turn's records
+ * are shared by every row it produces - its slices and the steer bubbles
+ * between them - so an answer serving any one of those rows carries the stale
+ * copy even when the echo named a different ordinal. Matching on the records
+ * catches both, where matching on the echoed ordinal catches neither.
+ *
+ * "Will seat" and not "carries", because {@link applyRangeResponse} can WITHHOLD
+ * the very records the raw answer carries: a row the host declared incomplete
+ * takes its whole turn's records out of the fold, so an answer that carries the
+ * turn and lists one of its rows in `incompleteRowIds` seats none of it. Reading
+ * `response.messages` alone there let a mixed answer - one historical row served
+ * complete beside an incomplete active row - retire the COMPLETE row and re-ask
+ * for it, discarding valid hydration to chase a body the fold had already
+ * refused. So the withholding rule is applied here, exactly as the fold applies
+ * it, before the records are looked at.
+ */
+export function rangeSeatsActiveTurn(
+  response: ChatRangeResponse,
+  activeTurnId: string | null,
+): boolean {
+  if (activeTurnId === null) return false;
+  // The fold collects the TURN KEYS of every withheld row and filters by turn,
+  // so one incomplete row of the active turn withholds all of it - including
+  // the copy a sibling row in the same answer would otherwise have seated.
+  for (const rowId of incompleteRowIdsToWithhold(response.incompleteRowIds)) {
+    if (assistantRowTurnKey(rowId) === activeTurnId) return false;
+  }
+  return response.messages.some(assistantMessageOfTurn(activeTurnId));
+}
+
+/**
+ * The ordinals this answer served for the ACTIVE turn's own rows.
+ *
+ * A range can serve a settled row and the streaming row in one answer. Only the
+ * streaming turn's rows are what a write staled, so only they are retired and
+ * only they are what a repair request is for - retiring every ordinal the answer
+ * happened to carry threw away a complete historical row's hydration, and
+ * recording every ordinal as repair work let a later visit to that historical
+ * row be charged against the streaming row's repair budget.
+ *
+ * Sibling slices need no special handling: {@link refreshSeatedRows} widens
+ * whatever it is given along the turn's shared records.
+ *
+ * This reads the answer's row ids, not what the fold will seat, so it also
+ * counts a row the fold withholds. That is safe only because withholding is
+ * per turn and wholesale: an answer that withholds any row of the active turn
+ * fails {@link rangeSeatsActiveTurn}, and nothing downstream of that gate
+ * reads these ordinals.
+ */
+export function activeTurnOrdinalsOf(
+  response: ChatRangeResponse,
+  activeTurnId: string | null,
+): readonly number[] {
+  if (activeTurnId === null) return [];
+  const ordinals: number[] = [];
+  response.rowIds.forEach((rowId, offset) => {
+    if (assistantRowTurnKey(rowId) === activeTurnId) {
+      ordinals.push(response.fromOrdinal + offset);
+    }
+  });
+  return ordinals;
+}
+
+/**
+ * Did the fold actually INSTALL this answer's copies of the active turn?
+ *
+ * Seating an answer is not the same as its records reaching the ledger:
+ * {@link preferFresherHeldMessages} can substitute a held copy for a served one,
+ * and then the window holds the body that was already there. A request's mark
+ * dates what the answer could contain and cannot see that - so certifying the
+ * turn on the mark alone declared the row current while the copy on screen was
+ * the torn one the answer had been sent to replace.
+ *
+ * Identity is the exact test, and it is available because the seat stores the
+ * message objects it was handed by reference (`seatLedgerRecords`); a
+ * substituted copy is a different object.
+ */
+export function rangeRecordsInstalled(
+  window: TranscriptWindow,
+  messages: readonly Message[],
+  activeTurnId: string | null,
+): boolean {
+  if (activeTurnId === null) return false;
+  const served = messages.filter(assistantMessageOfTurn(activeTurnId));
+  if (served.length === 0) return false;
+  return served.every(
+    (message) =>
+      window.records.messages.get(message.messageId)?.record === message,
+  );
+}
+
+const assistantMessageOfTurn =
+  (turnId: string) =>
+  (message: Message): boolean =>
+    message.role === "assistant" && assistantTurnKey(message) === turnId;
 
 /**
  * While a turn streams, the held copy of its assistant message outranks any
@@ -4165,6 +4526,23 @@ export function holdsActiveTurnAssistantMessage(
  * {@link hydratedRecords} renders rather than the first one found - see
  * {@link heldMessageCopy}. Comparing the served body against some OTHER held
  * copy decides the seat on a record the reader is not looking at.
+ *
+ * ## The arm is chosen by the CALLER, and a provisional body forfeits it
+ *
+ * `activeTurnId` is the only thing that selects the active arm, and the store
+ * passes `null` for it deliberately when the held copy is one IT seated
+ * provisionally - a body it accepted knowing the answer predated a write the
+ * client dropped (see `chat-session-store`'s provisional-seat ledger). The
+ * active arm's premise is that the held copy has every delta applied; for that
+ * body the client itself recorded that it does not, so the premise is false and
+ * the arm must not run. Under the settled arm the catch-up's copy seats unless
+ * the held one is demonstrably ahead, which is the correct default for a record
+ * whose incompleteness the client has already established.
+ *
+ * Without that, a catch-up requested precisely to repair the provisional body
+ * was substituted away by the body it was sent to replace, and the row went on
+ * rendering content the client knew to be short of the host with no gap left to
+ * re-request it.
  */
 function preferFresherHeldMessages(
   window: TranscriptWindow,
@@ -4533,7 +4911,12 @@ export function applyRangeResponse(
         ...completeWindow,
         records,
         spans,
-        hydratedBytes: freshTierBytes(records, spans),
+        hydratedBytes: chargedWindowBytes(
+          records,
+          spans,
+          completeWindow.liveMessages,
+          completeWindow.liveEvents,
+        ),
         clock,
       },
       servedAssistantTurns(
@@ -5458,7 +5841,12 @@ export function evictTranscriptWindowToBudget(
     spans,
     // Recomputed from the ledger rather than trusted from the loop's running
     // figure - the loop's arithmetic is control flow, the derivation is truth.
-    hydratedBytes: freshTierBytes(window.records, spans),
+    hydratedBytes: chargedWindowBytes(
+      window.records,
+      spans,
+      window.liveMessages,
+      window.liveEvents,
+    ),
     evictionTerminal,
   });
 }
@@ -5512,4 +5900,71 @@ function evictClosureUnit(
     unionSaving += records.events.get(id)?.bytes ?? 0;
   }
   return unionSaving;
+}
+
+/**
+ * What a post-eviction window still holds that CANNOT be dropped, by kind.
+ *
+ * The classification mirrors `evictTranscriptWindowToBudget`'s own
+ * `isProtected`, predicate for predicate and in the same order, so a span is
+ * reported under the reason that actually saved it. Live records are `"tail"`:
+ * they own no ordinal, so no range hydration can bring them back.
+ *
+ * Each kind's figure is derived from the LEDGER, not summed from a per-span
+ * field - there is no longer such a field, and the derivation is also what
+ * makes each kind internally deduplicated, matching how
+ * {@link TranscriptWindow.hydratedBytes} itself is defined. Records aliased
+ * ACROSS two kinds are counted in both; this is a report for the accountant's
+ * `"over-protected"` reasoning rather than a budget decision, and a kind that
+ * silently absorbed its neighbour's share would be the more misleading of the
+ * two errors.
+ */
+export function transcriptWindowProtectedBytes(
+  window: TranscriptWindow,
+  visible: OrdinalRange | null,
+  required: readonly number[],
+): readonly ProtectedBytes[] {
+  const byKind = new Map<ProtectedRegionKind, HydratedSpan[]>();
+  const classify = (span: HydratedSpan): ProtectedRegionKind | null => {
+    if (spanEnd(span) >= window.rowCount && window.rowCount > 0) return "tail";
+    if (
+      required.some(
+        (ordinal) => span.fromOrdinal <= ordinal && spanEnd(span) > ordinal,
+      )
+    ) {
+      return "required";
+    }
+    if (
+      visible !== null &&
+      span.fromOrdinal < visible.toOrdinal &&
+      spanEnd(span) > visible.fromOrdinal
+    ) {
+      return "visible";
+    }
+    return null;
+  };
+  for (const span of window.spans) {
+    const kind = classify(span);
+    if (kind === null) continue;
+    const group = byKind.get(kind);
+    if (group === undefined) byKind.set(kind, [span]);
+    else group.push(span);
+  }
+  const reported: ProtectedBytes[] = [];
+  for (const [kind, spans] of byKind) {
+    const bytes = freshTierBytes(window.records, spans);
+    if (bytes > 0) reported.push({ kind, bytes });
+  }
+  const liveBytes = recordsByteLength(window.liveMessages, window.liveEvents);
+  if (liveBytes > 0) {
+    const tail = reported.find((entry) => entry.kind === "tail");
+    if (tail === undefined) reported.push({ kind: "tail", bytes: liveBytes });
+    else {
+      reported[reported.indexOf(tail)] = {
+        kind: "tail",
+        bytes: tail.bytes + liveBytes,
+      };
+    }
+  }
+  return reported;
 }

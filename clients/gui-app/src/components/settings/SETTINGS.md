@@ -24,6 +24,7 @@ SettingsLayout
     └── settings panel route
         ├── GeneralSettingsPanel
         ├── AppearanceSettingsPanel
+        ├── OpeningBehaviorPanel
         ├── ProvidersSettingsPanel
         ├── NotificationsSettingsPanel
         ├── AgentsSettingsPanel
@@ -199,6 +200,9 @@ Supporting pieces, all viewport-agnostic where possible:
   aware (see below).
 - `settings-touch-targets.css` Coarse-pointer hit-area rules for the route
   shell (see below).
+- `settings-row-description.ts` The `SettingsRow` description-id context and
+  its `useSettingsRowDescriptionId()` reader - what lets a control name the
+  description beside it through `aria-describedby`.
 - `settings-row-layout.ts` The `max-md:` label floor shared by every
   label-beside-control row, `SettingsRow`'s and the bespoke ones alike - what
   decides, per row width, which controls stack and which stay inline.
@@ -206,6 +210,20 @@ Supporting pieces, all viewport-agnostic where possible:
   The label owns the flexible width; controls stay pinned to the trailing edge.
   If a wide control wraps, it remains right-aligned on its new line instead of
   falling under the label at the leading edge.
+  The description `<p>` carries a `useId()` id and a `max-w-[72ch] text-pretty`
+  reading measure, and the row publishes that id to its control through
+  `settings-row-description.ts`'s context - `useSettingsRowDescriptionId()`,
+  passed straight into `aria-describedby`, so a screen reader gets the row's
+  second line instead of a bare label. It reads `undefined` when the row has
+  no description, which DROPS the attribute rather than pointing it at
+  nothing. A context and not a `control` render prop for two reasons: the
+  control arrives already built, so the row cannot reach into it; and a
+  function prop returning JSX reads as a component definition during render to
+  `react/no-unstable-nested-components`. `control` therefore stays a plain
+  `ReactNode` and no existing call site changed. The context lives in its own
+  module so `settings-row.tsx` keeps exporting only a component (fast refresh
+  / `react(only-export-components)`), the same split `settings-row-layout.ts`
+  already makes.
 - `settings-group.tsx` A named group of rows: a small, quiet label OUTSIDE a
   bordered card (never a row-shaped band inside one). Used by General; `tone:
 "danger"` gives Danger Zone its restrained-red card without a separate
@@ -495,80 +513,154 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     for rebinding), Pin context usage breakdown (global toggle for the
     always-visible agent context-window breakdown, default off).
   - **Browser**: the in-app browser has no toggle - it is always on, and the
-    group carries no master switch.
-    Web link default + per-kind terminal/markdown link open-mode selects are
-    always active (no `disabled` state).
-    Agent tab surfacing (`agentTabSurfacingMode`: `pip` | `tile` | `off`,
-    default `off` - what the GUI does when the AGENT opens a browser tab via
-    its REPL `openTab` tool) governs suppressing host-driven opens that
-    previously always split the canvas.
-    `pip` floats the tab picture-in-picture unless a user-converted PiP is
-    showing or the epic surface is hidden; `tile` places a canvas tile
-    grouped by session - same-session opens become tabs of one pane - even
-    in hidden epics; `off` answers electron foreground creates with a hidden
-    off-screen view so the agent's open still succeeds, and leaves headless
-    tabs in the sidebar.
-    Disposition decisions live in `lib/browser-view/agent-tab-surfacing.ts`;
-    headless-origin tabs are diffed from `browser.sessions` lifecycle frames
-    in the dock, seeded snapshot-only so surfacing stays ephemeral across
-    reloads.
-    A conditional Detected dev origins row follows.
-    There is no standing risk disclosure in this group - the master toggle
-    row that carried one was deleted along with the toggle, and the
-    `SettingsRow` `risk` prop it was the sole consumer of was deleted with
-    it.
-  - **Saved logins** (`browser-settings-section.tsx`'s second group,
-    `data-testid="settings-saved-logins"`): where website logins in the in-app
-    browser are kept, and the only place they can be turned off, forgotten, or
+    group carries no master switch. What is left of the group is the
+    conditional **Detected dev origins** row (terminal URLs with local hosts
+    or explicit ports, kept for browser-origin classification), so the whole
+    `SettingsGroup` is skipped when none were detected rather than drawing a
+    heading over an empty card. The link-open and agent-tab-surfacing selects
+    that used to lead this group live in **Opening behavior** now - see that
+    section for the fields and their semantics.
+  - **Website sessions** (`browser-settings-section.tsx`'s second group,
+    `data-testid="settings-saved-logins"`): where session data from the in-app
+    browser is kept, and the only place it can be turned off, removed, or
     inspected per site. Keychain-refactor spec §7.3; the group renders NOTHING
     without a `browserView` bridge (the web build), because every row is about
     a machine's jar - nor without a host runtime (`useHostBinding()`, the
     non-throwing accessor), since the list is a host's answer and both
-    destructive rows travel to hosts. That gate is on what RENDERS: the rows
+    destructive actions travel to hosts. That gate is on what RENDERS: the rows
     live in their own component so the site-list query, which reaches
     `useHostClient()` and would THROW with no provider, is never mounted
     above it.
     Saving is silent and on by default, Chrome-style - there is no consent
-    step, no status row and nothing to retry - so this group is passive: a
-    toggle, a destructive action, and a list.
-    - **Save website logins on this machine** is the desktop-local pref
+    step and nothing to retry - so this group is passive: a toggle, a compact
+    preview, and an import row.
+    - **Save website sessions on this computer** is the desktop-local pref
       (`useBrowserSaveLogins()`), not a settings-store field and not a host
       value: it is a statement about THIS machine (decision #18), so it neither
       syncs nor follows the scoped host. Off switches new and live `primary`
       tiles onto a throwaway partition (they reload signed out) and leaves the
-      `persist:` jar on disk untouched - that is what Forget is for - so a
+      `persist:` jar on disk untouched - that is what Remove all is for - so a
       confirm stands in front of it and turning it back on returns to the same
       logins. Nothing is copied in either direction.
-    - **Forget all browser logins** (destructive confirm) moved here from the
-      tile shield popover, which was ticket 08's temporary home. It calls the
-      module-level `forgetAllBrowserLogins()` on the sessions coordinator and
-      so speaks for EVERY host the user has a live browser stream to; that is
-      what "all" means, and it is why the action is not tile-scoped.
-      It answers whether any stream took the frame, and the confirm closes only
-      then - the same refusal the per-row Clear makes, so a click that reached
-      no host never reads as a completed forget.
-    - **Sites with saved logins** reads `browser.savedLoginSites` from the
-      surface's host (`useBrowserSavedLoginSitesQuery`) - registrable domains
-      and a relative last-seen, never values. The method is optional
+    - **Bring in existing sessions** (`import-logins-dialog.tsx`) is the row
+      after the saved-session preview. It opens a three-step dialog
+      over four desktop bridge calls: `listLoginImportSources` (Pick: the
+      browsers and profiles found on this machine, plus "Import from a
+      file…", whose native picker runs in main so the renderer never names a
+      path), `scanLoginImportSource` (Choose sites: a filterable checklist of
+      registrable domains with cookie counts, read from METADATA only so no
+      OS prompt fires yet), and `importLogins` (the one call that opens the
+      keychain / keyring and writes the durable jar). Google rows are listed
+      unchecked and disabled - Google binds sessions to the device (DBSC), so
+      a copied cookie can stop being a login at Google's next check - behind
+      an "Import Google logins anyway" switch that is off by default and
+      never remembered; turning it on moves them into the checklist ticked,
+      shows the warning beside the switch, and sends
+      `includeDeviceBound: true`, which is the only way the desktop honours
+      a Google domain. The dialog says which prompt the Import click will
+      raise before it does ("Allow, not Always Allow" on macOS). Windows'
+      app-bound (`v20`) cookies are reported under a banner
+      as protected, never silently dropped; the cookie-file path is the way
+      through there. The push to the hosts is MAIN's, like forget-all's
+      frames and for the same reason - a jar frame speaks for the user's
+      whole slice on a host, so a renderer may ask for one and may not send
+      one. `importLogins` writes the jar and then calls
+      `capturePrimaryProfileOnEveryHost()`, one whole-jar
+      `primaryProfileCaptured` per host with a live browser stream, and rides
+      the ack count back as `notifiedHosts`; `useLoginImportRun` is one call
+      with nothing to chain. Done reports "sent to N hosts" from that count -
+      never "saved", because a host acks a jar it may still drop. Zero live
+      streams is the documented opportunistic outcome, not a failure. The
+      capture is needed at all because the write mutes the delta observer, so
+      the coalesced deltas that carry an ordinary sign-in never fire for an
+      import. The row is disabled
+      with a hint when saving is off, since the import writes the durable
+      jar the tiles are not on then. Every failure is a result value with a
+      closed reason and one explainer (Full Disk Access deep-links to the
+      pane; "quit the browser fully" for a locked database); nothing retries
+      on its own, because a retry after a denied Keychain prompt is a second
+      prompt. The steps themselves are the headless `ImportLoginsFlow`
+      (`import-logins-flow.tsx`), which the dialog wraps and the tour's
+      login-import act renders on its stage; the surface supplies the
+      FRAME (header / title / description / footer) because the dialog's
+      are Radix parts that throw outside a `Dialog`. The dialog reads
+      "an import is in flight" off the mutation cache (`useIsMutating` on
+      `browserMutationKeys.importLogins()`), since the mutation is the
+      flow's. The row also opens on a ONE-SHOT INTENT
+      (`stores/settings/browser-focus-store.ts`, the `providers-focus-store`
+      shape): the login-import announcement toast
+      (`login-import-announcement-controller.tsx`, mounted beside the
+      app-update toast) arms `openImportLogins` and navigates to General,
+      the row derives `open` from its own state OR the intent, and closing
+      - or mounting with saving off, when the row would refuse - consumes
+        it. The toast shows once per install, for a user who has already
+        finished onboarding (a fresh user meets the feature as a tour act
+        instead); either surface consumes the `login-import` id in the
+        persisted `feature-announcements` store, so exactly one of them ever
+        shows. The toast CLAIMS the id rather than consuming it (`claim`
+        re-reads localStorage before writing, synchronously), because the
+        store is per renderer and two windows restored together would each
+        hydrate it empty; the tour consumes it on the act's mount AND on the
+        tour's finish unconditionally (the availability read is still pending
+        on an immediate Skip, and an act the list held can be dropped again),
+        so leaving the tour never resurrects the toast. The toast also holds
+        until the system-tab modal API is published, since its action
+        navigates through it and would otherwise no-op on a cold launch.
+    - **Saved website sessions** reads `browser.savedLoginSites` from the
+      surface's host (`useBrowserSavedLoginSitesQuery`) - registrable domains,
+      never values. Settings shows the count and first three sites in
+      alphabetical order; a non-empty preview opens a right-side sheet with
+      search, every site, per-site Remove, and Remove all. A genuinely empty
+      collection has no disclosure, while the sheet stays open after Remove
+      all to offer import as the next step. The method is optional
       (non-floor), so the query is gated on `useHostSupportsMethod` and a host
       that never answered renders no list rather than an empty one. `sealed`
       is NOT "no sites": it says the logins exist but this host cannot open
       them until the desktop that wrapped its key connects, and it renders its
-      own hint. Per-row **Clear** sends the `clearSite { domain }` frame
-      (`clearSavedLoginSite()`) and refetches; the row is hidden optimistically
+      own hint plus Remove all because deleting the jar does not require
+      opening the collection. A preview or sheet row whose
+      `contributedByHostId` names a host OTHER than this machine's carries one
+      muted "Includes a sign-in from <host>" line
+      (universal-sign-in decision 9) - weak copy on purpose, because the marker
+      behind it is sticky and survives the user signing into that site here.
+      The display name resolves through the host directory
+      (`useHostDirectoryEntry`), falling back to the raw hostId when this client
+      cannot currently list that host - the same last resort `resolveHostName`
+      takes, and better than inventing "another machine". The local comparison
+      goes through `useReactiveLocalHostId` (not the local directory ENTRY,
+      which goes null while the local host restarts), and a login this desktop
+      itself contributed says nothing at all - naming the user's own machine on
+      every row would bury the lines that mean "this came from somewhere else".
+      Two things about the id are worth knowing before reading a row: it is
+      always the ANSWERING host's own, so a third machine is never named and a
+      remote contribution that already reached this desktop's jar shows nothing
+      in the local host's list (it arrives there as a desktop-origin echo); and
+      the render guard is `typeof === "string"`, not `!== null`, because the
+      same-minor RPC path returns the payload UNPARSED - a host predating the
+      field sends no key at all, and the schema's `.default(null)` only runs on
+      the version-gap decode. Per-row **Remove** sends
+      the `clearSite { domain }` frame
+      (`browserView.clearSavedLoginSite()`) and refetches; the row is hidden optimistically
       because the host merges asynchronously and the refetch behind the click
       can still read the pre-clear slice. That optimism RELEASES itself: a
       domain is hidden only while the latest response still names it (retired
       from state during render), so signing back into a cleared site shows it
-      again instead of hiding it for the session.
+      again instead of hiding it for the session. **Remove all** calls the
+      bridge's `forgetLogins()` directly and therefore speaks for every host
+      with a live browser stream; main owns both native destructive confirms.
   - **Running agents**: Prevent sleep while running
     (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
     "Two different mobile questions"), Show global resources button, Show
     navigator resource stats (these stay out of Appearance - they change
     information visibility, not styling).
-  - **Setup & migration**: Product tour (replay onboarding), Data migration
-    (retry moving local SQLite tasks/epics to cloud - stays out of
-    Diagnostics, which is support capture, not user data recovery).
+  - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
+    your work and Data migration used to share this group under the name
+    "Setup & migration"; both moved to the scoped host's **Overview**, because
+    each acts on ONE machine's local data and General is app-wide - the rows
+    could only ever speak for whichever host the window happened to point at,
+    while naming none. The tour stays because it is genuinely window-level:
+    replaying it re-runs this app's onboarding, which no host owns. The group
+    is named for its subject rather than for its single row.
   - **Danger Zone** (`DangerZoneSection`, `SettingsGroup` with `tone:
 "danger"`, `data-testid="settings-danger-zone"`, kept last): **Local app state
     only** (reset tabs/layout/drafts/settings/view prefs + reload) - the one
@@ -583,6 +675,71 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     distinct restrained-red card/label tone is unchanged from before the
     reorg, just carried by the shared group component instead of bespoke
     markup.
+- `Opening behavior` (`panels/opening-behavior-panel.tsx`,
+  `/settings/opening-behavior`, third in the Application group) Where a click
+  LANDS. TWO `SettingsGroup`s - Links and Tile placement - each one enum
+  select per store field, written through the store's single patch setters -
+  no local state, no disabled states. Store keys are unchanged from the
+  three-group layout (`content` / `conversation` / `browser`, `per-kind` /
+  `per-category`); only the labels are product vocabulary now.
+  - Options are named for the DESTINATION, not the container: `In this pane`,
+    `In a new split`, `Per tile type` - and for links, `In Traycer`,
+    `In default browser`, `Per link type`. A user asks "where does this
+    open", so the answer belongs in the option, not in the reader's head.
+  - Every `EnumSelect`'s `ariaLabel` is its visible label VERBATIM
+    (`Open links`, `Markdown`, `Open new tiles`, `Files, diffs & artifacts`,
+    ...). Destination-shaped option copy only reads correctly under a control
+    the user can find by the name they can see; a spoken name that says
+    something else ("Content tiles") breaks voice control, which types what is
+    on screen.
+  - One `TRIGGER_CLASS` (`w-[min(60vw,12rem)]`) for every trigger: two widths
+    made the override rows look like a different KIND of control rather than a
+    narrower one.
+  - A revealed per-type fragment is wrapped in one `bg-foreground/3` div, so
+    the override rows read as subordinate to the row that revealed them. An
+    alpha of the foreground, not `bg-muted` - see the raised-surface rule in
+    `clients/gui-app/AGENTS.md`.
+  - The four unconfigurable modifiers get ONE platform-aware legend under the
+    groups (`modLabel()` / `altLabel()` / `shiftLabel()` from
+    `lib/keybindings/platform`), not a clause in each row's copy: repeating
+    them per row spent description space the row's own scope needed.
+  - **Links**: "Open links" (no description - the legend carries the
+    modifiers) writes `linkOpen.default` (`in-app | external | per-kind`,
+    default `in-app`); `per-kind` reveals Markdown / Terminal / GitHub /
+    Images, each `in-app | external`, each described by WHERE those links are
+    encountered. `linkOpenModeForKind` resolves a kind against the default.
+  - **Tile placement**: "Open new tiles" writes `tilePlacement.default`
+    (`tab | split | per-category`, default `per-category`); `per-category`
+    reveals **Files, diffs & artifacts** (`content`), **Agents & terminals**
+    (`conversation`) and **Browsers** (`browser`) - product nouns for what the
+    user opens, not the store's category words. Browser alone adds **Picture
+    in picture** (`BrowserTilePlacement`) because the other two have no PiP
+    host. Defaults content=tab, conversation=tab, browser=split;
+    `tilePlacementForCategory` resolves a category against the default. On a
+    single-tile viewport (`useIsMobileViewport()`) the row gains the
+    DESCRIPTION "Narrow windows show one tile at a time, so everything opens
+    in this pane." - a description, not the amber `hint`, because nothing is
+    wrong and nothing was overridden: the window is simply narrow.
+  - **Agent-opened tabs** lives in Tile placement too (after the per-type
+    fragment, unconditional - it is a placement question wearing another
+    name, and a group of one row read like a third topic). `agentTabSurfacing`
+    (`surface | off`, default `off`) - what the GUI does when a HOST opens a
+    browser tab (the agent's REPL `openTab` tool, or a headless page popup),
+    described as "when an agent or a page opens a browser tab without you
+    clicking anything". `surface` ("Like any browser tile") places the tab
+    using the Browsers placement above: `pip` floats it unless a
+    user-converted PiP is showing or the epic surface is hidden, and
+    `tab`/`split` place a canvas tile grouped by session - same-session opens
+    become tabs of one pane - even in hidden epics. `off` ("Leave in the
+    sidebar") answers Electron foreground creates with a hidden off-screen
+    view so the open still succeeds, and leaves headless tabs in the sidebar.
+    Disposition decisions live in
+    `lib/browser-view/tiles/surface-host-opened-tab.ts`; headless-origin tabs
+    are diffed from `browser.sessions` lifecycle frames in the dock, seeded
+    snapshot-only so surfacing stays ephemeral across reloads.
+  - The pre-refactor keys (`browserLinkDefaultMode`,
+    `{terminal,markdown}BrowserLinkOpenMode`, `agentTabSurfacingMode`) are
+    migrated once in the store's persist `merge` and then dropped.
 - `Appearance` Five preference groups via `settings-group.tsx`, broad-to-
   specialized in one column: **Theme**, **Interface**, **Typography**,
   **Terminal**, **Artifact icons** - each a quiet `<h2>` label outside its own
@@ -872,7 +1029,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     the tabs that were supposed to hold its settings (and hid the fact that
     Cursor's General tab rendered nothing). Nothing renders between the provider
     header and the tab rail now. Also a "Create an API key" link
-    that opens the provider dashboard via `runnerHost.openExternalLink`
+    that opens the provider dashboard via `openLink(url, "docs")`
     (`API_KEY_DASHBOARD_URL`). The key is stored AES-256-GCM encrypted in
     `provider-overrides.json` and never returned over RPC - `state.apiKey` only
     reports `configured` + `source` (`stored` | `env`). When unset, the host
@@ -1571,7 +1728,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
         wrong thing to open a tab on, so the dialog carries an explicit policy
         (`applyStartResult` vs `applyPollResult`) instead of inferring one from
         the arm: a tick refreshes the panel and the resume record, and only a
-        user action reaches `openExternalLink`. Handling both in one place
+        user action reaches `openLink`. Handling both in one place
         reopened the sign-in page every 1.5s, on a flow the user was already in.
       - **Polling is single-flight**, scheduled from the previous tick's
         settlement rather than on a `setInterval`: an interval keeps firing
@@ -2129,6 +2286,19 @@ aria-live="polite"` carrying the equivalent text for
       first attempt). An install in flight freezes EVERY row, which is where the
       old `showUpdateNowInput` guard went - it existed so a second
       `desiredVersion` write could not retarget a draining update.
+    - **Explicit downgrades are supported.** The picker permits any available,
+      non-yanked version with different SemVer precedence from the installed
+      version (build metadata alone is not a distinct target). Hosts must
+      negotiate `host.update.install@1.2` before older rows are enabled; earlier
+      hosts show guidance to update first. The summary and automatic updater
+      still offer only newer versions. A downgrade dispatch
+      opts into `host update --allow-downgrade` after checking the host's CLI
+      supports it; the CLI uses a private verified install source while keeping
+      update progress, busy-host refusal, and the post-swap health check. An
+      older CLI that cannot honor a downgrade is refused before dispatch.
+      This installs a version once; it does not pin it against future updates.
+      Desktop launch reconciliation may install a newer resolved release, and
+      the host reconciler still enforces the channel's minimum supported version.
     - The asset lookup takes a SOLE `platforms` key as authoritative: the host's
       CLI projects each entry to `currentHostPlatformKey()` before emitting it,
       so re-deriving a key here would get win32-arm64 wrong (it resolves to the
@@ -2160,9 +2330,226 @@ aria-live="polite"` carrying the equivalent text for
       Progress after an accepted install comes from `host.status.updateProgress`,
       not from the install response, because the swap is detached and outlives
       it.
+    - **The operation card renders an OPERATION, never a quiet host.** The
+      shared projection (`projectFleetUpdateView`) consults the coarse
+      `updateProgress` marker BEFORE concluding `idle` from
+      `updateOperation: {kind:"none"}`, because the shipped legacy updater
+      (`traycer host update`, every host while the executor cohort is
+      shadow-disabled) writes no attempt record at all - a @1.3 host on that
+      path says "no attempt" and "updating" in the same reply, and reading the
+      attempt alone rendered a live download → swap → restart as "Host is up to
+      date" on the Overview whose own Update now had just started it. The
+      coarse marker projects `updating` (generic sentence, indeterminate bar)
+      or `failed` with the updater's own cause. Both are INFORMATIONAL: the
+      marker is a file with no liveness (a crashed updater leaves a host
+      serving `updating` forever), so `updating` neither holds the lifecycle
+      gate nor earns the fast poll - Restart, Diagnostics and the service
+      verbs stay usable under it, and the 10s `host.status` baseline is what
+      refreshes it. A view `isQuietUpdateView` accepts (`idle`, or
+      `unknown` with no retained phase) renders NO card: "Host is up to date"
+      was a sentence about the catalog from a projection that knows only the
+      attempt record, and it sat directly above the updates region saying
+      "v1.3.0-rc.2 is available." about the same host. The landing banner hides
+      on the same predicate, so the two cannot drift on where quiet begins.
+    - **The two parks the marker cannot carry come from the RECORDS.** A busy
+      host makes the legacy updater stop, and it stops by WITHDRAWING its
+      marker (a refusal on policy is not a failure), leaving either bytes
+      installed under a host still running the old version, or a newer host
+      staged and waiting. `legacy-update-facts.ts` derives both from
+      `host.getInstallationInfo` beside the same `host.status` read - debt by
+      the CLI's own `readActivationState` rule (runtime-stamp equality when
+      the record has a stamp, else comparable-and-unequal SemVer), staged wait
+      as a stage at a different version than the install while `busy` - and
+      the Overview hands them to the projector as
+      `FleetUpdateWireObservation.legacyFacts`. They project the existing
+      `waiting-to-activate` ("Update installed — restart host to finish") and
+      `waiting-for-work` ("Update waits for N sessions to finish")
+      kinds, AFTER the coarse marker and before `idle`, and like every park
+      they hold no lifecycle gate and earn no fast poll. The card offers
+      **Restart** on the debt FACT rather than on the view kind, so a retained
+      `failed` marker beside real debt keeps its failure text and still shows
+      the way forward, and **Force update…** on a staged wait with a positive
+      count, which confirms through `HostBusyForceDeferDialog` and dispatches
+      `host.update.install {version: staged, force: true}` through the page's
+      one install mutation. The offer and the dispatch share ONE predicate
+      (`stagedEntryOfferable`, the refusal `describeForceUpdateRefusal`
+      derives for the staged version): the catalog must still list it, not
+      withdrawn, with an asset this page can resolve (a host whose record
+      carries no platform is not offered Force against a multi-platform
+      entry - a deliberate narrowing; the CLI's own `host update --force`
+      still works there) and no CLI floor. A
+      withdrawn stage is neither offered nor dispatched (the CLI would purge
+      the parked stage and then refuse the version) and carries no floor
+      remedy, since no CLI version installs a yanked release; an asset the
+      catalog has since marked unavailable does NOT refuse, because the
+      bytes are already staged and the CLI installs them without resolving
+      the asset again. Under debt the updates sentence reads "v{installed}
+      is installed — restart host to finish." and the catalog is compared
+      against the INSTALLED version, so Update now stays only for something
+      newer than what is already on disk. Because the facts live in records
+      that change under a mounted page, `host.getInstallationInfo` polls at the
+      `host.status` cadence (10s) and an accepted install invalidates it beside
+      `host.status`. The record leg is held to the SAME liveness rule the
+      status leg is projected under (`canonicalReadIsLive`: not errored, not
+      paused, not aged past its staleness while not fetching, and the query
+      itself enabled) - not "has not failed" alone, and not a second
+      staleness rule with its own timestamp arithmetic: a read that is not
+      live yields NO facts, so the two record-derived rows and every offer
+      keyed on them (Restart on the debt fact, the installed-version
+      comparison under debt, Force update… and the confirm it opens) are
+      withdrawn until the next live read, and the projector falls through
+      to the status leg. The withdrawal is scoped to the record leg on
+      purpose: expiring the whole observation would demote a live attempt
+      the status leg is reporting (progress bar, lifecycle gate, fast poll)
+      on one failed `host.getInstallationInfo` poll - likeliest exactly
+      during a swap. An unusable scope, by contrast, demotes through the
+      status leg and keeps the record-derived sentence qualified ("Last
+      seen: …"). An in-flight refetch is live (still looking); a request
+      whose response never arrives ends as an error - each attempt bounded
+      by the transport's 30 s response timeout, one query retry - never as
+      an indefinitely retained payload. And a record leg that is not live is
+      not "gone": the facts as read keep the catalog's comparison baseline
+      (an activation debt read from the record still names the installed
+      version, and the region's sentence says "(last known)" - whenever
+      EITHER leg is not live, since the debt is the record's installed
+      version read against the status read's running version - rather than
+      re-offering that version as available), while every offer and the
+      projector's park take the live facts only. An open Force confirm
+      closes only when a live leg no longer carries its stage (the running version moving re-keys the
+      query, and the `usable` rule closes the confirm there), and an attempt
+      park's Restart is offered only when a live leg vouches that no stage
+      waits (Restart cannot activate a stage). The offers need a live STATUS
+      read as well (`statusLive`: the same `canonicalReadIsLive` over the
+      status read's health, `usable` included). The retained status payload
+      stays in the facts so a park renders qualified ("Last seen: …"), but
+      Restart on the debt fact, Force update… and an attempt park's Force
+      restart are withdrawn while the status read has failed or aged - a
+      Restart pressed off an old `hostVersion` would restart a host that may
+      already have activated; the evidence stays, the dispatch does not. An
+      open restart confirm is closed by the `!usable` rule only when it was
+      armed for the cooperative `host.restart`; one armed for the bridge
+      respawn (`restartViaForceFallback`, captured at open) survives the
+      scope going unusable - the respawn needs no client and is the recovery
+      an unreachable local host needs most - and closes on its own
+      settlement or when this page's host stops being this machine's. The Overview is the only leg that derives: the landing
+      banner keeps its desktop-status debt arm, and the fleet legs pass
+      `legacyFacts: null`, which the projector reads as "not observed".
+    - **A CLI requirement has a remedy in the card.** The best target's
+      projected unavailable asset is the executing CLI's verdict, recognized
+      by `HOST_CLIENT_FLOOR_REASON_PREFIX` from the shared
+      `host-version/client-floor-reason` module (the one authored reason a
+      client acts on; it lives in `clients/shared` because both endpoints are
+      OSS clients, and becomes protocol the day a host authors it). A floor
+      that is not a version - the pre-repair projector put the prefix on an
+      unreadable floor too - is not repairable: every route shows
+      installation help, and the recheck below does not run.
+      A stored CLI version that already satisfies the requirement does not
+      clear it: the host can still be executing an older copy. A retained hash
+      on a withdrawn platform build is not evidence of a CLI requirement.
+      `describeCliFloorRemedy` owns the sentence and actions together:
+
+      | Installation and update state                                                                               | Card action                                                                                                                                                                                                                               |
+      | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+      | Any source, floor that is not a version                                                                     | Show installation help; no command, no recheck                                                                                                                                                                                            |
+      | Local Desktop, feed's latest (or the installed build, when up to date) below or incomparable with the floor | The Desktop floor fallback, decided before the available, downloading, ready and up-to-date rows below (never for a missing floor): a sentence naming the shortfall plus the copy-command route for the bundled CLI and installation help |
+      | Local Desktop, update available                                                                             | Download update, respecting the Desktop block reason                                                                                                                                                                                      |
+      | Local Desktop, downloading                                                                                  | Disabled download progress                                                                                                                                                                                                                |
+      | Local Desktop, ready                                                                                        | Restart to update through the shared install flow, or Finish update for manual guidance; block reason and in-flight state still win                                                                                                       |
+      | Local Desktop, up to date                                                                                   | Hint to restart Desktop to finish updating the host tools                                                                                                                                                                                 |
+      | Local Desktop, check failed or updater unavailable                                                          | The bridge's error message (or a fallback sentence), Check again, and installation help                                                                                                                                                   |
+      | Local Desktop, idle or checking                                                                             | Checking: the checking sentence. Idle: an invitation to check, one guarded automatic bridge check per mount (the authoritative snapshot, only an updater never asked, `automatic` intent) and a Check for updates button                  |
+      | npm, local or remote                                                                                        | Copy `npm install -g @traycerai/cli@<required version>` - the exact floor when the payload names one, RCs included; the table's stable `@latest` only when it names none                                                                  |
+      | Homebrew, winget, Scoop, apt, rpm; stable floor                                                             | Copy that manager's command from `PACKAGE_MANAGER_UPGRADE_COMMAND`                                                                                                                                                                        |
+      | Homebrew, winget, Scoop, apt, rpm; prerelease floor                                                         | Show installation help: those feeds carry stable releases (Homebrew's formula takes a prerelease only by manual dispatch), so the rolling command would report nothing newer                                                              |
+      | Manual, remote Desktop, or local Desktop without a bridge; known POSIX platform                             | Copy the recorded absolute CLI path as one single-quoted shell token plus `cli upgrade`; otherwise copy `traycer cli upgrade`                                                                                                             |
+      | The same sources on Windows with a recorded absolute path                                                   | Copy `& '<path>' cli upgrade` and `& '<path>' host restart` for PowerShell; explicitly run outside Traycer on that machine                                                                                                                |
+      | The same sources on Windows without a usable path, or an unknown platform                                   | Copy `traycer cli upgrade` and `traycer host restart`; explicitly run outside Traycer on that machine                                                                                                                                     |
+      | Installation manifest unreadable                                                                            | Show installation help, opening the Doctor sheet                                                                                                                                                                                          |
+
+      The copy rows explain an older executing copy when the stored version
+      already clears the requirement. No row opens an in-app terminal: the
+      1.2.0 hosts needing this remedy cannot run a supplied command on ordinary
+      terminal creation. Check now stays; the remedy replaces Update now until
+      the host accepts the candidate, and its copy says the page rechecks on
+      its own rather than asking for a click (the recheck below is what
+      restores Update now). Two pinned npm commands can be on screen in one
+      Settings dialog and disagree on purpose: the Desktop sidecar's hint
+      (`host-settings-package-manager-upgrade-hint.tsx`) pins the version
+      Desktop bundles, the answer to "your npm CLI is older than Desktop's";
+      this remedy pins the host's required floor, the answer to "this host
+      refuses the CLI it has". Advanced rows retain their reasons.
+      Sentence precedence preserves the record-derived parks: **failure →
+      activation debt → CLI remedy → checking → unreachable → no manifest →
+      stranded on its release line / up to date → unavailable / available**.
+      A failed catalog read drops the remedy along with the actionable catalog.
+
+    - **Repair rechecks while the Overview is open.** The Overview re-asks
+      `host.update.check` every 30 seconds while it renders a CLI-floor
+      remedy (`useHostOverviewUpdates`, invalidating the shared key the way
+      the active-update accelerator does), and the first answer that clears
+      the floor ends the recheck and restores Update now. Keyed on the
+      rendered remedy, not on the response: which floored row the remedy
+      names is the summary walk's answer (the installed line's matching
+      stable and later RCs, strictly newer than what runs), and the response
+      carries no installed version - a table lane over the response alone
+      kept polling on floored rows of an `installed-rc` catalog that no
+      remedy named, a release on another line included. The recheck stops
+      with the remedy: a retired region (externally managed, unsupported
+      install) shows a notice in its place and is not re-asked; so does a
+      floor that is not a version (`repairable` false - no upgrade can clear
+      it; a help-only remedy over a READABLE floor, such as a prerelease on
+      a manager that publishes none, keeps rechecking, because an install
+      made another way is what it waits for), and the page's own gate
+      (`enabled`) holds it as it holds the region. It is a flat 30 s, hotter
+      than the 5 s → 60 s lane it replaced but bounded by the remedy being on
+      screen; each tick refetches, so Check now briefly reads busy on its
+      own. The table keeps the `cli-unavailable` lane and the two error lanes
+      for this method, nothing data-driven beyond that. The existing
+      10-second installation-info poll refreshes the stored CLI facts beside
+      it. A floored staged version, or one absent from the actionable
+      manifest, offers neither Force update nor Force restart: restarting
+      cannot activate a stage. The Force gate reads the catalog ENTRY's own
+      floor too, apart from the asset's authored reason - staged bytes
+      install whatever the asset's availability says - so an entry whose
+      floor is not a version is refused even when the projector never
+      prefixed the asset. A readable floor stays the asset's verdict: the
+      stored CLI manifest is no substitute for the executing copy's own
+      comparison in either direction. An open
+      Force confirmation rechecks its exact version at click time, settles
+      synchronously on refusal, and shows the reason inline. The card's
+      Restart, Force update… and Force restart sit behind the same
+      capability and page-wide gates as the header's Restart and the region
+      (`restartDegrade`, `updates.degrade`, `anyPending`) - withheld rather
+      than disabled, since the card reports the park and the header's menu
+      item carries the reason - and an open confirm closes when its method
+      is withdrawn or its region retires.
   - **Installation** reads `host.getInstallationInfo`. `unmanaged` is a real
     state, not an error - a host run from a checkout has no install record - and
     it says so rather than claiming nothing is installed.
+  - **Data & migration** (`panels/host-import-migration-section.tsx`), between
+    Installation and the danger zone: **Import your work** (opens the session
+    import wizard for the sessions on THIS host's disk) and **Data migration**
+    (retry moving this host's local SQLite tasks and epics to cloud). Both came
+    off General for the reason that section now states - they move one
+    machine's data, and this page is the only one that names the machine. It
+    stays out of Diagnostics for the older reason: that page is support
+    capture, not user data recovery.
+    - Both rows ride the STREAM transport, not the unary one, so the Overview
+      re-provides `StreamRuntimeContext` from `useScopedStreamBinding` beside
+      the unary `HostRuntimeContext` it already re-provided - the fourth stream
+      re-provider, and safe for the same positional reason as the other three
+      (no composer below it, so no path to the microphone; see the roster in
+      `use-scoped-host-binding.ts`).
+    - The group is WITHHELD, not emptied, until the stream beneath it names the
+      host the page names. `useScopedStreamBinding` is null for a commit or two
+      after an explicit pick, and null by design while `following`, so the
+      provider falls back to the ambient stream - which is still dialing the
+      effective host. Running an import or a migration through it would move
+      one machine's data under another machine's name. Availability is read
+      from that same client (`useSessionImportAvailableFor`) rather than from
+      context, so the row cannot offer an import host A negotiated and submit
+      it to host B. An empty titled card reads as a page that failed to load,
+      which is why the whole group goes rather than its contents.
   - **Doctor** (`host-doctor-rpc-card.tsx`) has the host shell its own CLI. Two
     things make the report trustworthy over a connection, and both come from the
     host: the structured failure arms (`cli-unavailable` / `cli-failed` /

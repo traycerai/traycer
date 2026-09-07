@@ -109,7 +109,6 @@ import {
   epicSubscribeV11,
   epicSubscribeV12,
   epicSubscribeV13,
-  epicSubscribeV20,
 } from "@traycer/protocol/host/epic/subscribe";
 import {
   listCloudChatPayloadsRequestSchema,
@@ -141,8 +140,10 @@ import {
 } from "@traycer/protocol/host/epic/chat-replica-read";
 import {
   listChatRecordsRequestSchema,
+  listChatRecordsRequestV11Schema,
   listChatRecordsResponseSchema,
-  listChatRecordsResponseSchemaV11,
+  listChatRecordsResponseV11Schema,
+  listChatRecordsResponseV12Schema,
   getChatRunSettingsRequestSchema,
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
@@ -876,27 +877,32 @@ export const epicListChatRecordsV10 = defineRpcContract({
   responseSchema: listChatRecordsResponseSchema,
 });
 
-// `epic.listChatRecords@1.1` puts the chat's cloud publication head on each
-// row, so the poll that repairs a lost stream delta carries the same freshness
-// fact the delta does. Request unchanged; the addition is one optional nested
-// key under `chats[]`, which an older peer's schema strips - the
-// `epic.listTasks@1.1` shape exactly.
+// `@1.1` - the doc-remainder union, gated on the CALLER'S declaration that it
+// no longer holds an epic-doc replica. Mirrors `epic.listTuiAgents@1.1` field
+// for field; the reasoning lives beside the schemas in `chat-records.ts`.
 export const epicListChatRecordsV11 = defineRpcContract({
   method: "epic.listChatRecords",
   schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: listChatRecordsRequestSchema,
-  responseSchema: listChatRecordsResponseSchemaV11,
+  requestSchema: listChatRecordsRequestV11Schema,
+  responseSchema: listChatRecordsResponseV11Schema,
 });
 
 /**
- * A `@1.0` host never reported a head, so the upgrade leaves the key ABSENT
- * rather than writing `null`.
+ * Both fills are FACTS about a `@1.0` peer, not defaults - which is what makes
+ * the upgraded value safe to ACT on rather than merely well-typed.
  *
- * `null` is the newer wire's affirmative "this row has no publication", and an
- * upgrade must not put an affirmative claim in an old peer's mouth - the
- * `host.getInstallationInfo` convention. Absent says the only true thing:
- * that host was never asked. Consumers read `head ?? null` and see no
- * difference, which is why the distinction costs them nothing.
+ * REQUEST, `hasDocReplica: true`: a caller speaking only `@1.0` predates the
+ * lane surface entirely - `@1.1` and `epic.state.subscribe` ship in the same
+ * `@traycer/protocol`, so there is no build that has one without the other. It
+ * therefore holds a doc replica, and the host must serve it registry rows only.
+ * A wrong guess here would hand the oldest clients in the fleet the
+ * duplicate-row conflict this whole minor exists to avoid.
+ *
+ * RESPONSE, `docResident: false`: a host serving `@1.0` returns REGISTRY ROWS
+ * ONLY by construction, so every row an older host can produce is
+ * registry-backed. A `@1.1` client reading an older host still has to union
+ * that host's doc map itself - the upgrade path cannot invent rows the wire
+ * never carried, and must not pretend it did.
  */
 export const epicListChatRecordsUpgradeV10ToV11 = defineUpgradePath<
   typeof epicListChatRecordsV10,
@@ -904,6 +910,45 @@ export const epicListChatRecordsUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: epicListChatRecordsV10.schemaVersion,
   to: epicListChatRecordsV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, hasDocReplica: true }),
+  upgradeResponse: (response) => ({
+    ...response,
+    chats: response.chats.map((row) => ({ ...row, docResident: false })),
+  }),
+});
+
+// `@1.2` puts the chat's cloud publication head on each row, so the poll that
+// repairs a lost stream delta carries the same freshness fact the delta does.
+// Request unchanged from `@1.1`; the addition is one optional nested key under
+// `chats[]`, which an older peer's schema strips - the `epic.listTasks@1.1`
+// shape exactly.
+export const epicListChatRecordsV12 = defineRpcContract({
+  method: "epic.listChatRecords",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: listChatRecordsRequestV11Schema,
+  responseSchema: listChatRecordsResponseV12Schema,
+});
+
+/**
+ * The IDENTITY, in both directions.
+ *
+ * REQUEST: `@1.2` takes `@1.1`'s request unchanged, so there is nothing to
+ * fill.
+ *
+ * RESPONSE: a `@1.1` host never reported a head, so the upgrade leaves the key
+ * ABSENT rather than writing `null`. `null` is the newer wire's affirmative
+ * "this row has no publication", and an upgrade must not put an affirmative
+ * claim in an old peer's mouth - the `host.getInstallationInfo` convention.
+ * Absent says the only true thing: that host was never asked. Consumers read
+ * `head ?? null` and see no difference, which is why the distinction costs
+ * them nothing.
+ */
+export const epicListChatRecordsUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicListChatRecordsV11,
+  typeof epicListChatRecordsV12
+>({
+  from: epicListChatRecordsV11.schemaVersion,
+  to: epicListChatRecordsV12.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -1015,10 +1060,17 @@ export const epicGetChatRunSettingsDowngradeV20ToV10 = defineDowngradePath<
 // ruling). Exported from there via the epic index, not re-exported here,
 // so `export *` consumers see exactly one binding.
 
+// The three LANE stream contracts (`epic.state.subscribe`,
+// `epic.status.subscribe`, `artifact.subscribe`) and the two lane unaries
+// (`epic.getWorkspaceContext`, `epic.retryMigration`) live beside their schemas
+// in `state-subscribe.ts` / `status-subscribe.ts` / `artifact-subscribe.ts` /
+// `lane-unaries.ts` - the `tui-agent-records.ts` and `communication-graph.ts`
+// arrangement, not this file's. They are exported through the epic index, not
+// re-exported here, so `export *` consumers see exactly one binding.
+
 export {
   epicSubscribeV10,
   epicSubscribeV11,
   epicSubscribeV12,
   epicSubscribeV13,
-  epicSubscribeV20,
 };

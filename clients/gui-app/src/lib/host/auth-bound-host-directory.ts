@@ -49,15 +49,8 @@ import { HostDirectoryService } from "@/lib/host/host-directory-service";
  * instead of wiping the merged directory and unbinding an active remote
  * selection.
  *
- * The PLAN is read from the same `AuthService`, per fetch, and stamped onto
- * every projected entry (`planAllowsRemote`). The wire carries pure liveness,
- * so whether a route is usable is the AND of that liveness and the account's
- * entitlement - and reading the entitlement off the object that owns the bearer
- * and the era this fetch was issued for is what keeps the two from skewing:
- * `AuthService` commits the credential BEFORE announcing a transition and
- * projects to the auth store after, so a directory refresh riding that
- * announcement would read the incoming account's hosts against the outgoing
- * account's plan if it took the plan from the store instead.
+ * Remote-host entitlement is enforced by authn when an attach grant is minted;
+ * the client projects only the registry's liveness information.
  */
 export function buildDefaultRemoteFetcher(
   auth: AuthService,
@@ -75,17 +68,10 @@ export function buildDefaultRemoteFetcher(
           ? { kind: "signed-out" }
           : { kind: "failed" };
       }
-      // Read once, after the list is in hand, so every row in one emission
-      // carries the same answer about the account.
-      const planAllowsRemote = auth.planAllowsRemoteHosts();
       return {
         kind: "hosts",
         entries: response.hosts.map((item) =>
-          hostListItemToDirectoryEntry(
-            item,
-            runnerHost.relayBaseUrl,
-            planAllowsRemote,
-          ),
+          hostListItemToDirectoryEntry(item, runnerHost.relayBaseUrl, true),
         ),
       };
     } catch {

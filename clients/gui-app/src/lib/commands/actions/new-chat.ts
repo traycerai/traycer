@@ -27,19 +27,16 @@ import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { reportableWarningToast } from "@/lib/reportable-error-toast";
 import { appLogger } from "@/lib/logger";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
-import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
-import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
+import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import {
-  Analytics,
-  AnalyticsEvent,
-  type AnalyticsSource,
-} from "@/lib/analytics";
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
+import type { AnalyticsSource } from "@/lib/analytics";
 
 const CHAT_PROJECTION_WAIT_MS = 30_000;
-
-export type NewChatSplitPosition = "right" | "bottom";
 
 export interface CreateChatCommandCallbacks {
   readonly onSuccess: (result: CreateChatResponse) => void;
@@ -54,37 +51,20 @@ export type CreateChatCommand = (
   callbacks: CreateChatCommandCallbacks,
 ) => void;
 
-export type CreatedChatOpenIntent =
-  | {
-      readonly kind: "active-tile";
-      readonly epicId: string;
-      readonly tabId: string;
-      readonly chatId: string;
-      readonly hostId: string;
-      readonly source: AnalyticsSource;
-    }
-  | {
-      readonly kind: "split";
-      readonly epicId: string;
-      readonly tabId: string;
-      readonly chatId: string;
-      readonly targetGroupId: string;
-      readonly position: NewChatSplitPosition;
-      readonly hostId: string;
-      readonly source: AnalyticsSource;
-    }
-  | {
-      // Opener path: drop a fresh instance into an explicit target group
-      // (no dedup, no active-group resolution). Used by the palette's
-      // open-into-target "New chat".
-      readonly kind: "target-group";
-      readonly epicId: string;
-      readonly tabId: string;
-      readonly chatId: string;
-      readonly groupId: string;
-      readonly hostId: string;
-      readonly source: AnalyticsSource;
-    };
+export interface CreatedChatOpenIntent {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+  /**
+   * Explicit placement for the created tile, or `null` to let the configured
+   * conversation placement decide (C3, C8). The opener path (palette
+   * open-into-target, side chat beside its source) is the only thing that
+   * names a pane.
+   */
+  readonly placement: ExplicitTilePlacement | null;
+  readonly source: AnalyticsSource;
+}
 
 /**
  * `openWhenProjected` returns a cancel - the same one
@@ -155,11 +135,11 @@ export function openNewChatInActiveTile(
       onSuccess: (result) => {
         if (cancelled) return;
         projectionCancel = args.openWhenProjected({
-          kind: "active-tile",
           epicId: args.epicId,
           tabId: args.tabId,
           chatId: result.chatId,
           hostId: args.hostId,
+          placement: null,
           source: args.source,
         });
       },
@@ -342,36 +322,24 @@ function openProjectedChat(
     name: displayTitle(chat.title, "agent"),
     hostId: intent.hostId,
   };
-  const canvas = useEpicCanvasStore.getState();
-  let opened: NestedFocusTarget | null = null;
-  if (intent.kind === "active-tile") {
-    opened = navigateNestedFocus(intent.epicId, intent.tabId, () =>
-      canvas.prepareOpenTileInTabFocusTarget(intent.tabId, node),
-    );
-  } else if (intent.kind === "target-group") {
-    opened = navigateNestedFocus(intent.epicId, intent.tabId, () =>
-      canvas.prepareOpenTileInPaneFocusTarget(
-        intent.tabId,
-        intent.groupId,
-        node,
-      ),
-    );
-  } else {
-    opened = navigateNestedFocus(intent.epicId, intent.tabId, () =>
-      canvas.prepareSplitPaneWithNodeFocusTarget(
-        intent.tabId,
-        intent.targetGroupId,
-        intent.position,
-        node,
-      ),
-    );
-  }
+  // `openTile` owns placement, focus, the route write AND the `chat_opened`
+  // analytics (`trackOpenedCanvasTile`), so this path no longer tracks by hand.
+  const opened = openTileWithNavigation(
+    {
+      node,
+      target: { tabId: intent.tabId },
+      gesture: "explicit",
+      modifiers: null,
+      placement: intent.placement,
+      dedupe: true,
+      source: intent.source,
+    },
+    navigateNestedFocus,
+    MANUAL_TILE_OPEN,
+  );
   // A pane can disappear while host creation is in flight. The open is then
   // abandoned exactly as it was before analytics existed - no fallback pane,
   // no retry - and the only difference is that no `chat_opened` is emitted.
   if (opened === null) return "target_unavailable";
-  Analytics.getInstance().track(AnalyticsEvent.ChatOpened, {
-    source: intent.source,
-  });
   return "opened";
 }

@@ -1,3 +1,4 @@
+import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 /**
  * Chat/terminal-agent tree body for the sidebar. Renders the tree of chat nodes
  * with expansion, rename, delete, and drag-drop behaviors.
@@ -8,18 +9,30 @@ import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { v4 as uuidv4 } from "uuid";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import {
   chatOpensPublishedCopy,
   makeChatOpenTileRef,
 } from "@/lib/chats/chat-open-tile-ref";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import {
   useEpicArchiveChat,
   useEpicDeleteChat,
   useEpicRenameChat,
 } from "@/hooks/epic/use-epic-chat-mutations";
-import { useChatArchiveSupported } from "@/hooks/epic/use-chat-archive-support";
+import {
+  useChatArchiveSupported,
+  SET_CHAT_ARCHIVED_METHOD,
+} from "@/hooks/epic/use-chat-archive-support";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
+import {
+  CHAT_NOT_ADOPTED_COPY,
+  type ChatWriteRoute,
+} from "@/stores/epics/open-epic/chat-write-routing";
 import { useCloudChatVisibilitySupported } from "@/hooks/epic/use-chat-sharing-support";
 import { useEpicSetCloudChatVisibility } from "@/hooks/epic/use-epic-chat-visibility-mutations";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
@@ -35,7 +48,7 @@ import {
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import {
-  computeDescendantCounts,
+  computeDescendantCountsFromTree,
   formatCascadeSummary,
 } from "@/lib/epic-tree-cascade";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
@@ -69,7 +82,10 @@ import {
   type SurfaceNotificationIndicators,
 } from "@/stores/notifications/notification-indicator-state";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
-import type { TreeSlice } from "@/stores/epics/open-epic/types";
+import type {
+  EpicTreeNodeType,
+  TreeSlice,
+} from "@/stores/epics/open-epic/types";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import { ProfileBadgedHarnessIcon } from "@/components/providers/profile-badged-harness-icon";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -106,6 +122,7 @@ import {
   isDefaultSort,
   makeNodeComparator,
   type NodeComparator,
+  type NodeSortClock,
 } from "@/lib/epic-sort";
 import {
   findOpenTileInTab,
@@ -130,7 +147,6 @@ import {
   useEpicAgentRoleClaims,
   useEpicAgentActivityTiers,
   type AgentActivityTier,
-  useEpicArtifactRecords,
   useEpicChatIds,
   useEpicConnectionStatus,
   useEpicNodeArchived,
@@ -141,7 +157,6 @@ import {
   useEpicNodeOwnerKind,
   useEpicPermissionRole,
   useEpicTreeIndex,
-  useEpicTreeNode,
   useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
 import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
@@ -206,8 +221,10 @@ import {
   EMPTY_PENDING_LIST,
   EMPTY_PRE_ACK_LIST,
   INDENT_PX,
+  SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
   anyMutationPending,
   nodePadRightClass,
+  revealSidebarNode,
   useNodeIconDisplay,
 } from "./epic-sidebar-tree-shared";
 import { TreeGroupGuide } from "./epic-sidebar-tree-guide";
@@ -273,11 +290,11 @@ import {
   type SidebarRowMenuEntry,
 } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
-import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
 import { type IndicatorRunningKind } from "@/components/notifications/notification-indicator-icon";
 import { useEpicStore } from "@/hooks/use-epic-store";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import {
@@ -306,16 +323,6 @@ type TreeFilterFn = (type: string | null | undefined) => boolean;
  */
 const SidebarViewerContext = createContext<boolean>(false);
 
-/**
- * Whether the epic's host advertises `epic.setChatArchived`. Resolved ONCE in
- * `ChatTreePanelBody` and read by the rows, for the same reason
- * {@link SidebarViewerContext} exists: it is a per-host fact, identical for
- * every row, and re-subscribing each row to the manifest registry would buy
- * nothing. `false` is the fail-closed default - every archive affordance stays
- * hidden until a handshake proves the method present.
- */
-const SidebarArchiveSupportedContext = createContext<boolean>(false);
-
 interface SidebarChatSharingValue {
   readonly visibilitySupported: boolean;
   readonly ownCloudChatByLocalId: ReadonlyMap<string, CloudChatSummary>;
@@ -327,8 +334,7 @@ const EMPTY_OWN_CLOUD_CHATS: ReadonlyMap<string, CloudChatSummary> = new Map();
 /**
  * Per-chat sharing facts that are identical for every row (capability, the
  * fold of local ids onto cloud rows, whether this task has an audience).
- * Resolved once in `ChatTreePanelBody` and read by the rows, matching
- * {@link SidebarArchiveSupportedContext}.
+ * Resolved once in `ChatTreePanelBody` and read by the rows.
  */
 const SidebarChatSharingContext = createContext<SidebarChatSharingValue>({
   visibilitySupported: false,
@@ -479,11 +485,21 @@ function useChatDescendantStatus(args: {
   readonly nodeId: string;
 }): ChatDescendantStatusRollup | null {
   const { epicId, nodeId } = args;
-  const tree = useEpicTreeIndex();
   const visibleIds = useSidebarVisibleIds();
-  const descendants = useMemo(
-    () => collectDescendantChatIds(nodeId, tree, visibleIds),
-    [nodeId, tree, visibleIds],
+  // Subscribed to this row's descendant IDS, not to the whole `tree` slice.
+  // The slice re-mints on any record change (the host stamps `updatedAt` per
+  // body write and `TreeNode` carries it), and this hook runs once per chat
+  // row, so reading the slice re-rendered every row on every stamp. The ids are
+  // strings, so a shallow compare bails exactly when this row's descendant set
+  // is unchanged - which a stamp never alters.
+  //
+  // `useShallow` is required, not decorative: a deriving selector returns a
+  // fresh array each call, so without it `useSyncExternalStore` sees a change
+  // on every notification and loops. See `epic-sidebar-filter.ts`.
+  const descendants = useEpicStore(
+    useShallow((state: OpenEpicState) =>
+      collectDescendantChatIds(nodeId, state.tree, visibleIds),
+    ),
   );
   const descendantHostIds = useEpicNodeHostIds(descendants);
   const activityTiers = useEpicAgentActivityTiers();
@@ -992,11 +1008,9 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     for (const ancestorId of ancestorIdsOfReveal) {
       expandAction(tabId, panelId, ancestorId);
     }
-    const row = Array.from(
-      region.querySelectorAll<HTMLElement>("[data-sidebar-node-id]"),
-    ).find((element) => element.dataset.sidebarNodeId === revealRequest.nodeId);
-    if (row === undefined) return;
-    row.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (!revealSidebarNode(region, revealRequest.nodeId, revealRequest.nonce)) {
+      return;
+    }
     clearSidebarNodeRevealRequest(tabId, revealRequest.nonce);
   }, [
     ancestorIdsOfReveal,
@@ -1020,31 +1034,47 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // so every child list sorts by it; the root list and the selection walk
   // below read it directly. The record heads are the epic session's
   // `chatRecordHeads`, pushed as owners publish.
+  //
+  // Subscribed to the DERIVED clock, not to `chats.byId`. The projector
+  // re-mints that map on every record change (`projectTreeSlice` stamps each
+  // node's `updatedAt`), so a raw subscription re-renders this panel - and
+  // through the context value's identity, every row that sorts children - on
+  // activity nothing here displays. That is the exact churn class
+  // `sidebar-chat-row-node-churn.test.tsx` pins. `useShallow` compares the
+  // clock entry by entry and hands back the PREVIOUS object when they agree,
+  // so a stamp that moves no chat's content time publishes nothing.
+  // The raw head table, for the cloud-only rows below. Safe to subscribe to
+  // directly, unlike `chats.byId`: it changes identity only when a
+  // publication actually advances, never on a projection stamp.
   const recordHeads = useEpicStore((s) => s.chatRecordHeads);
-  const chatsById = useEpicStore((s) => s.chats.byId);
-  const sortClock = useMemo(
-    () =>
+  const sortClock = useEpicStore(
+    useShallow((state: OpenEpicState): NodeSortClock =>
       localChatLastActiveAtById({
-        chatsById,
-        recordHeads,
+        chatsById: state.chats.byId,
+        recordHeads: state.chatRecordHeads,
         sessionHostId: epicSessionHostId,
         ownCloudChatByLocalId,
       }),
-    [chatsById, epicSessionHostId, ownCloudChatByLocalId, recordHeads],
+    ),
   );
-  const selectableIds = useMemo(
-    () =>
+  // Same hygiene fix as the artifact panel: `tree` is a direct input, so this
+  // recomputed per record change and handed the effect below a fresh array.
+  // The store write was already a no-op (`setSelectableSidebarIds` guards with
+  // `sameStringArray`), so nothing re-rendered - the effect just fired for
+  // nothing. Comparing the answer stops it firing.
+  const selectableIds = useEpicStore(
+    useShallow((state: OpenEpicState): readonly string[] =>
       collectVisibleSidebarTreeIds({
         rootIds,
         expandedIds,
-        tree,
+        tree: state.tree,
         treeFilter: CHATS_TREE_FILTER,
         emitFilter: CHATS_TREE_FILTER,
         visibleIds,
         comparator,
         clock: sortClock,
       }),
-    [rootIds, expandedIds, tree, visibleIds, comparator, sortClock],
+    ),
   );
   const setSelectableIds = bulkSelection?.setSelectableIds ?? null;
   useEffect(() => {
@@ -1237,7 +1267,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                     <EpicSidebarCloudChatRow
                       key={entry.key}
                       chat={entry.chat}
-                      epicId={epicId}
                       tabId={tabId}
                       depth={0}
                       selectionMode={selectionMode}
@@ -1285,37 +1314,33 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   return (
     <ChatIndicatorHostScopes scopes={indicatorScopes}>
       <NotificationIndicatorSnapshot onChange={setNotificationIndicators} />
-      <SidebarArchiveSupportedContext.Provider value={canArchive}>
-        <SidebarChatSharingContext.Provider value={chatSharingValue}>
-          <SidebarViewerContext.Provider value={isViewer}>
-            <SidebarSortContext.Provider value={comparator}>
-              <SidebarSortClockContext.Provider value={sortClock}>
-                <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-                  {searchOpen &&
-                  !selectionMode &&
-                  surfaceSearchQuery === null ? (
-                    <ChatSearchHeaderInput
-                      tabId={tabId}
-                      resultCount={searchResultCount}
-                    />
-                  ) : null}
-                  <SidebarContent className="gap-0">
-                    <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
-                      <SidebarGroupContent
-                        ref={treeRegionRef}
-                        className="flex min-h-0 flex-1 flex-col"
-                        data-testid="epic-chat-tree-region"
-                      >
-                        {panelContent}
-                      </SidebarGroupContent>
-                    </SidebarGroup>
-                  </SidebarContent>
-                </SidebarFilterVisibilityContext.Provider>
-              </SidebarSortClockContext.Provider>
-            </SidebarSortContext.Provider>
-          </SidebarViewerContext.Provider>
-        </SidebarChatSharingContext.Provider>
-      </SidebarArchiveSupportedContext.Provider>
+      <SidebarChatSharingContext.Provider value={chatSharingValue}>
+        <SidebarViewerContext.Provider value={isViewer}>
+          <SidebarSortContext.Provider value={comparator}>
+            <SidebarSortClockContext.Provider value={sortClock}>
+              <SidebarFilterVisibilityContext.Provider value={visibleIds}>
+                {searchOpen && !selectionMode && surfaceSearchQuery === null ? (
+                  <ChatSearchHeaderInput
+                    tabId={tabId}
+                    resultCount={searchResultCount}
+                  />
+                ) : null}
+                <SidebarContent className="gap-0">
+                  <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
+                    <SidebarGroupContent
+                      ref={treeRegionRef}
+                      className="flex min-h-0 flex-1 flex-col"
+                      data-testid="epic-chat-tree-region"
+                    >
+                      {panelContent}
+                    </SidebarGroupContent>
+                  </SidebarGroup>
+                </SidebarContent>
+              </SidebarFilterVisibilityContext.Provider>
+            </SidebarSortClockContext.Provider>
+          </SidebarSortContext.Provider>
+        </SidebarViewerContext.Provider>
+      </SidebarChatSharingContext.Provider>
     </ChatIndicatorHostScopes>
   );
 }
@@ -1373,6 +1398,38 @@ interface ChatNodeProps {
   onToggleSelection: (id: string) => void;
 }
 
+/**
+ * The parts of a chat row's tree node that the row RENDERS.
+ *
+ * Same narrowing as the artifact row, and in the same class for the same
+ * reason - which is an ARM behaviour, not a code shape. `CHAT_TREE_KEYS` omits
+ * `updatedAt`, so on the doc arm's incremental path a chat's activity never
+ * rebuilds the tree and the whole-node read costs nothing. On every FULL
+ * projection - which is what the lane arm runs on its record-update paths -
+ * `projectTreeSlice` takes each node's `updatedAt` from the record, so activity
+ * DOES re-mint this node, and reading the whole thing re-renders the row (and
+ * its unmemoized chrome) for a field it does not display.
+ *
+ * The displayed last-activity time is NOT this: it comes from
+ * `useEpicNodeUpdatedAt`, a per-node scalar off the records projection, and it
+ * re-renders the row exactly when the time it shows changes. That is correct
+ * and stays.
+ */
+interface ChatRowNodeFacts {
+  readonly type: EpicTreeNodeType;
+  readonly title: string;
+}
+
+function useChatRowNode(nodeId: string): ChatRowNodeFacts | null {
+  return useEpicStore(
+    useShallow((state: OpenEpicState): ChatRowNodeFacts | null => {
+      if (!Object.hasOwn(state.tree.nodeById, nodeId)) return null;
+      const node = state.tree.nodeById[nodeId];
+      return { type: node.type, title: node.title };
+    }),
+  );
+}
+
 function localTreeNodeLastActiveAt(input: {
   readonly isChat: boolean;
   readonly recordUpdatedAt: number;
@@ -1407,22 +1464,16 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     onToggleSelection,
   } = props;
   const { expandedIds, toggleExpanded } = expansion;
-  const node = useEpicTreeNode(nodeId);
+  const node = useChatRowNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
   const navigateNested = useEpicNestedFocusNavigation();
+  const { openTile } = useEpicTileNavigation();
   // Non-null only where this tree is mounted on a surface that cannot express
   // the desktop open gestures - see `ChatTreeSurface`.
   const surface = useChatTreeSurface();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
-  const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTilePreviewInTabFocusTarget,
-  );
   const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareCloseCanvasTabFocusTarget,
   );
-  const promotePreviewInTab = useEpicCanvasStore((s) => s.promotePreviewInTab);
   const markArtifactSelfDeleted = useEpicCanvasStore(
     (s) => s.markArtifactSelfDeleted,
   );
@@ -1437,7 +1488,29 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const renameTerminalAgent = useEpicRenameTuiAgent();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
 
-  const liveRecords = useEpicArtifactRecords();
+  // The cascade-delete summary, subscribed to its ANSWER rather than to the
+  // record list it is computed from.
+  //
+  // `useEpicArtifactRecords()` hands back an array whose identity moves whenever
+  // ANY record in the epic changes - a body write, a chat token, a timestamp
+  // stamp - so every one of these rows re-rendered on every one of those, for a
+  // count that almost never moves. Measured on the field's shape (40 rows, 12
+  // bursted): 40 of 40 re-rendered per burst, bystanders included. `memo` is no
+  // defence, because this is the row's OWN subscription rather than a prop.
+  //
+  // The tree walk is the same counts by a different route: `childrenByParent`
+  // and `nodeById` are the normalised structure this sidebar already renders, so
+  // it agrees with what the user sees. `useShallow` is required rather than
+  // decorative - the selector returns a fresh object per call, and without it
+  // `useSyncExternalStore` sees a change on every notification and loops.
+  //
+  // The artifact row was moved to exactly this in `d1cb1b3a`; this row is the
+  // same defect in the second copy of it.
+  const cascadeCounts = useEpicStore(
+    useShallow((state: OpenEpicState) =>
+      computeDescendantCountsFromTree(state.tree, nodeId),
+    ),
+  );
 
   const expanded = expandedIds.has(nodeId);
   const hasChildren = childIds.length > 0;
@@ -1470,13 +1543,32 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     deleteTerminalAgent.isPending,
   ]);
 
-  const archiveSupported = useContext(SidebarArchiveSupportedContext);
+  const ownerHostId = useEpicNodeHostId(nodeId);
+  const sessionHostId = useEpicSessionHostId();
+  const mutationHostId = ownerHostId ?? sessionHostId;
+  const archiveSupported = useHostSupportsMethod(
+    mutationHostId,
+    SET_CHAT_ARCHIVED_METHOD,
+  );
   const isArchived = useEpicNodeArchived(nodeId);
   const archiveChat = useEpicArchiveChat();
   const toggleArchive = useCallback(() => {
     if (!canMutate || !archiveSupported) return;
-    archiveChat.mutate({ epicId, chatId: nodeId, archived: !isArchived });
-  }, [archiveChat, archiveSupported, canMutate, epicId, isArchived, nodeId]);
+    archiveChat.mutate({
+      epicId,
+      chatId: nodeId,
+      hostId: mutationHostId,
+      archived: !isArchived,
+    });
+  }, [
+    archiveChat,
+    archiveSupported,
+    canMutate,
+    epicId,
+    isArchived,
+    nodeId,
+    mutationHostId,
+  ]);
   const archivePending = archiveChat.isPending;
   const archiveRow = useMemo<ChatRowArchiveInputs>(
     () => ({
@@ -1497,8 +1589,10 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   // for a row that carries no owner is the Epic SESSION's host - the host
   // that projected the row - never the app-wide one, which during a re-point
   // is a different machine from the one this tree is showing.
-  const ownerHostId = useEpicNodeHostId(nodeId);
-  const sessionHostId = useEpicSessionHostId();
+  // Declared HERE rather than beside `openRef` below, which is the only other
+  // thing that reads it: the record-head lookup is keyed on the record
+  // identity `(ownerUserId, chatId)`, and the content clock beneath it needs
+  // the head.
   const ownerUserId = useEpicNodeOwnerUserId(nodeId);
   // The record row's publication head, pushed as the owner publishes. For a
   // foreign row it is the freshest content clock there is - fresher than the
@@ -1562,64 +1656,46 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     ],
   );
 
-  const selectChatNode = useCallback(() => {
-    if (isRenaming) return;
-    if (openableType === null) return;
-    navigateNested(epicId, tabId, () =>
-      prepareOpenTilePreviewInTabFocusTarget(tabId, {
-        ...openRef(),
-      }),
-    );
-    // The opening itself is the tree's, on every surface. A mounting surface
-    // only gets to append - the switcher sheet closes here.
-    if (surface !== null) surface.onRowActivated();
-  }, [
+  const selectChatNode = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (isRenaming) return;
+      if (openableType === null) return;
+      openTile({
+        node: openRef(),
+        target: { tabId },
+        gesture: "single",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
+      // The opening itself is the tree's, on every surface. A mounting surface
+      // only gets to append - the switcher sheet closes here.
+      if (surface !== null) surface.onRowActivated();
+    },
     // No `nodeId` / `nodeName`: the tile ref is built inside `openRef`, which
     // closes over both and is itself a dependency.
-    openRef,
-    epicId,
-    isRenaming,
-    navigateNested,
-    openableType,
-    prepareOpenTilePreviewInTabFocusTarget,
-    surface,
-    tabId,
-  ]);
+    [openRef, isRenaming, openableType, openTile, surface, tabId],
+  );
 
-  const handleDoubleClick = useCallback(() => {
-    if (isRenaming) return;
-    if (openableType === null) return;
-    // Host-aware: a cross-host clone holds one tab per host for the same
-    // copied chat id, and this row means its own.
-    const found = findOpenTileInTab(tabId, openRef());
-    if (found !== null) {
-      navigateNested(epicId, tabId, () => {
-        promotePreviewInTab(tabId, found.paneId);
-        return {
-          paneId: found.paneId,
-          tileInstanceId: found.instanceId,
-        };
+  const handleDoubleClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (isRenaming) return;
+      if (openableType === null) return;
+      // Host-aware dedupe: a cross-host clone holds one tab per host for the
+      // same copied chat id, and `openRef` means this row's own.
+      openTile({
+        node: { ...openRef(), instanceId: uuidv4() },
+        target: { tabId },
+        gesture: "double",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
       });
-    } else {
-      navigateNested(epicId, tabId, () =>
-        prepareOpenTileInTabFocusTarget(tabId, {
-          ...openRef(),
-          instanceId: uuidv4(),
-        }),
-      );
-    }
-  }, [
-    // `nodeId` and `nodeName` both reach the lookup through `openRef` now,
-    // which is itself a dependency.
-    openRef,
-    epicId,
-    isRenaming,
-    navigateNested,
-    openableType,
-    prepareOpenTileInTabFocusTarget,
-    promotePreviewInTab,
-    tabId,
-  ]);
+    },
+    [openRef, isRenaming, openableType, openTile, tabId],
+  );
 
   const handleToggle = useCallback(
     (event: React.MouseEvent<HTMLSpanElement>) => {
@@ -1629,17 +1705,31 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     [nodeId, toggleExpanded],
   );
 
+  // Chat rows only - the hook returns `"registry-rpc"` for every other kind,
+  // so a terminal agent or artifact in this same row component is untouched.
+  // Read HERE rather than in the shell body because `startRename` needs it:
+  // an unadopted chat's title must never become editable in the first place.
+  const writeRoute = useChatWriteRoute(artifactType === "chat", nodeId);
+
   const startRename = useCallback(() => {
     if (!canMutate) return;
+    // The menu entry that calls this is already disabled, so this is the
+    // keyboard and double-click path. Refusing to ENTER edit mode is the
+    // point: the user is told before they type, not after - a commit-time
+    // refusal would silently discard what they wrote.
+    if (writeRoute === "unavailable") return;
     setRenameValue(nodeName);
     setIsRenaming(true);
     setTimeout(() => {
       renameInputRef.current?.focus();
       renameInputRef.current?.select();
     }, 0);
-  }, [canMutate, nodeName, setIsRenaming, setRenameValue]);
+  }, [canMutate, nodeName, setIsRenaming, setRenameValue, writeRoute]);
 
-  const commitRename = useCallback(() => {
+  // ASYNC: the doc write's verdict and the rename-stamp check are both round
+  // trips now. Callers fire-and-forget it, and a function returning
+  // `Promise<void>` is assignable to one returning `void`.
+  const commitRename = useCallback(async () => {
     const trimmed = renameValue.trim();
     if (trimmed.length === 0) {
       setIsRenaming(false);
@@ -1663,7 +1753,10 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     if (artifactType === "terminal-agent") {
       const agents = epicHandle.store.getState().tuiAgents.byId;
       if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
-        if (epicHandle.store.getState().renameArtifact(nodeId, trimmed)) {
+        // AWAITED: the replica is on the worker thread, so the doc write's
+        // verdict is a round trip. A promise here is truthy, so the branch
+        // would be taken even for a write that failed.
+        if (await epicHandle.store.getState().renameArtifact(nodeId, trimmed)) {
           renameArtifactInTab(tabId, nodeId, trimmed);
         }
         return;
@@ -1674,15 +1767,17 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     // post chats-off-YJS is most of this tree — so these renames had no local
     // feedback at all. Rationale and the promise-carried retire contract live
     // in `use-rename-canvas-tab.ts`, which this mirrors.
-    const requestId = epicHandle.store
+    const requestId = await epicHandle.store
       .getState()
       .beginRenameMutation(nodeId, trimmed);
-    const retire = (outcome: "landed" | "failed"): void => {
+    const retire = async (outcome: "landed" | "failed"): Promise<void> => {
       if (requestId === null) return;
-      epicHandle.store.getState().retirePendingMutation(requestId, outcome);
+      await epicHandle.store
+        .getState()
+        .retirePendingMutation(requestId, outcome);
     };
-    const landed = (): void => {
-      retire("landed");
+    const landed = async (): Promise<void> => {
+      await retire("landed");
       // The tab snapshot only on settlement - it is a persisted fallback with
       // no rollback path, so a speculative write would preserve a rejected
       // title across restarts - and only while this is still the LATEST
@@ -1691,26 +1786,42 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       // `use-rename-canvas-tab.ts`.
       if (
         requestId === null ||
-        epicHandle.store.getState().isLatestRenameStamp(nodeId, requestId)
+        (await epicHandle.store
+          .getState()
+          .isLatestRenameStamp(nodeId, requestId))
       ) {
         renameArtifactInTab(tabId, nodeId, trimmed);
       }
     };
-    const failed = (): void => {
-      retire("failed");
+    const failed = async (): Promise<void> => {
+      await retire("failed");
     };
     if (artifactType === "chat") {
-      void renameChat
-        .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
-        .then(landed, failed);
+      settleDetachedEpicMutation(
+        renameChat
+          .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
+          .then(landed, failed),
+        "sidebar tree",
+        "chat rename settlement",
+      );
     } else if (artifactType === "terminal-agent") {
-      void renameTerminalAgent
-        .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
-        .then(landed, failed);
+      settleDetachedEpicMutation(
+        renameTerminalAgent
+          .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
+          .then(landed, failed),
+        "sidebar tree",
+        "terminal-agent rename settlement",
+      );
     } else {
-      // No RPC arm for this kind — nothing can ack it, so a lingering stamp
-      // would never land; drop it outright.
-      retire("failed");
+      // No RPC arm for this kind - nothing can ack it, so a lingering stamp
+      // would never land; drop it outright. Detached because the retire is a
+      // round trip now and there is nothing here that waits on it - which is
+      // also why its rejection needs a terminal handler of its own.
+      settleDetachedEpicMutation(
+        retire("failed"),
+        "sidebar tree",
+        "retire without an acking RPC",
+      );
     }
   }, [
     artifactType,
@@ -1730,7 +1841,13 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     (event: KeyboardEvent<HTMLInputElement>) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        commitRename();
+        // Detached: committing is a round trip now, and a key handler returns
+        // synchronously, so nothing on this stack can await the rejection.
+        settleDetachedEpicMutation(
+          commitRename(),
+          "sidebar tree",
+          "rename commit",
+        );
       } else if (event.key === "Escape") {
         event.preventDefault();
         setIsRenaming(false);
@@ -1745,7 +1862,14 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   };
 
   const confirmDelete = () => {
-    epicHandle.store.getState().deleteArtifact(nodeId);
+    // Detached: the delete is a round trip now. The surface below reacts to
+    // the PROJECTION, not to this promise, so nothing here waits on it - and
+    // nothing here would otherwise hear it fail.
+    settleDetachedEpicMutation(
+      epicHandle.store.getState().deleteArtifact(nodeId),
+      "sidebar tree",
+      "local delete projection",
+    );
     markArtifactSelfDeleted(nodeId);
     const handleDeleteSuccess = () => {
       setConfirmDeleteOpen(false);
@@ -1767,7 +1891,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     };
     if (artifactType === "chat") {
       deleteChat.mutate(
-        { epicId, chatId: nodeId },
+        { epicId, chatId: nodeId, hostId: mutationHostId },
         { onSuccess: handleDeleteSuccess, onError: handleDeleteError },
       );
     } else if (artifactType === "terminal-agent") {
@@ -1781,7 +1905,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   if (node === null) return null;
   if (!treeFilter(node.type)) return null;
 
-  const cascadeCounts = computeDescendantCounts(liveRecords, nodeId);
   const cascadeSummary = formatCascadeSummary(cascadeCounts);
   const rowClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (selectionMode || event.ctrlKey || event.metaKey) {
@@ -1789,7 +1912,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       onToggleSelection(nodeId);
       return;
     }
-    selectChatNode();
+    selectChatNode(event);
   };
   const rowDoubleClick = selectionMode ? noopRowAction : handleDoubleClick;
 
@@ -1817,12 +1940,23 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       renameInputRef={renameInputRef}
       renameValue={renameValue}
       onRenameValueChange={setRenameValue}
-      onCommitRename={commitRename}
+      // Wrapped rather than passed through: the prop is declared void-returning
+      // and `commitRename` is a round trip now. Detaching states that nothing
+      // here waits on it, which is what the caller already assumed; settling it
+      // is what keeps a failure off the unhandled channel.
+      onCommitRename={() => {
+        settleDetachedEpicMutation(
+          commitRename(),
+          "sidebar tree",
+          "rename commit",
+        );
+      }}
       onRenameKeyDown={handleRenameKeyDown}
       onToggle={handleToggle}
       onClick={rowClick}
       onDoubleClick={rowDoubleClick}
       treeFilter={treeFilter}
+      writeRoute={writeRoute}
       onStartRename={startRename}
       onPerformDelete={performDelete}
       confirmDeleteOpen={confirmDeleteOpen}
@@ -1843,6 +1977,10 @@ interface ChatNodeShellProps {
   readonly epicId: string;
   readonly tabId: string;
   readonly nodeId: string;
+  /** Resolved once in the row and threaded down, so the menu entries, the
+   *  archive hover button and `startRename` cannot disagree about whether this
+   *  row's registry-backed mutations may be sent. */
+  readonly writeRoute: ChatWriteRoute;
   /** The row's OWN owner host, resolved once in `ChatNode` and threaded down
    *  so the leading icon and the archive affordances read the same session. */
   readonly ownerHostId: string | null;
@@ -1868,7 +2006,7 @@ interface ChatNodeShellProps {
   readonly onRenameKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  readonly onDoubleClick: () => void;
+  readonly onDoubleClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly onStartRename: () => void;
   readonly onPerformDelete: () => void;
   readonly confirmDeleteOpen: boolean;
@@ -2005,7 +2143,7 @@ function ChatNodeShellBody(
     openNewConversationModal({
       epicId,
       tabId,
-      placement: ACTIVE_TILE_PLACEMENT,
+      placement: null,
       parentId: nodeId,
       // Names no host, exactly like the panel's own `+`: the modal resolves
       // this Epic's placement memory (last created chat's host, else the
@@ -2022,11 +2160,24 @@ function ChatNodeShellBody(
     openNewConversationModal,
     tabId,
   ]);
-  const { decision } = props;
   const sharing = useChatRowSharing(epicId, nodeId, artifactType, canMutate);
+  const { writeRoute } = props;
+  // The hover button is the SECOND dispatcher of `epic.setChatArchived`, so
+  // gating only the menu entry would leave a one-click path to an RPC naming
+  // no registry row. It is withdrawn rather than disabled, which is this
+  // file's existing rule for it - see `chatRowArchiveState`: the button is a
+  // pointer shortcut that may only appear on an otherwise-quiet row, and "the
+  // entry, not the button, carries the explanation".
+  const decision: ChatRowArchiveDecision =
+    writeRoute === "unavailable" && props.decision.showButton
+      ? { ...props.decision, showButton: false }
+      : props.decision;
+  const copyIdEntry = useSidebarCopyIdMenuEntry(nodeId);
   const rowMenuEntries = chatRowMenuEntries({
+    copyIdEntry,
     nodeId,
     canMutate,
+    writeRoute,
     archiveEntry: decision.entry,
     sharingEntry: sharing.entry,
     onNewChildAgent: handleNewChildAgent,
@@ -2051,7 +2202,7 @@ function ChatNodeShellBody(
         nodeId={nodeId}
         panelId="chats"
         contextMenu={
-          canEdit && !isRenaming && !selectionMode ? (
+          !isRenaming && !selectionMode ? (
             <ContextMenuContent>
               <SidebarContextMenuItems entries={rowMenuEntries} />
             </ContextMenuContent>
@@ -2082,7 +2233,6 @@ function ChatNodeShellBody(
             artifactType={artifactType}
             depth={depth}
             isActive={isActive}
-            canEdit={canEdit}
             updatedAt={updatedAt}
             hasChildren={hasChildren}
             expanded={expanded}
@@ -2093,12 +2243,12 @@ function ChatNodeShellBody(
             isSelected={isSelected}
             onToggleSelection={onToggleSelection}
             isArchived={archiveRow.isArchived}
-            reserveArchiveSlot={decision.showButton}
+            reserveArchiveSlot={decision.showButton || archiveRow.pending}
             showSharedIndicator={sharing.showIndicator}
           />
         )}
 
-        {decision.showButton ? (
+        {decision.showButton || archiveRow.pending ? (
           <ChatRowArchiveButton
             nodeId={nodeId}
             nodeName={nodeName}
@@ -2108,7 +2258,7 @@ function ChatNodeShellBody(
           />
         ) : null}
 
-        {canEdit && !isRenaming && !selectionMode ? (
+        {!isRenaming && !selectionMode ? (
           <ChatMoreMenu
             nodeId={nodeId}
             nodeName={nodeName}
@@ -2132,6 +2282,7 @@ function ChatNodeShellBody(
         onToggleSelection={onToggleSelection}
       />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={confirmDeleteOpen}
         onOpenChange={onConfirmDeleteOpenChange}
         title={`Delete ${EPIC_NODE_SENTENCE_NOUNS[artifactType]} "${nodeName}"?`}
@@ -2592,6 +2743,7 @@ function ChatRenameRow(props: ChatRenameRowProps) {
       className={cn(
         "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1",
         props.isArchived && ARCHIVED_ROW_CLASS,
+        SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
       )}
       style={{
         paddingLeft: `${depth * INDENT_PX + BASE_PAD_LEFT}px`,
@@ -2637,13 +2789,12 @@ interface ChatRowButtonProps {
   readonly artifactType: EpicNodeKind;
   readonly depth: number;
   readonly isActive: boolean;
-  readonly canEdit: boolean;
   readonly updatedAt: number;
   readonly hasChildren: boolean;
   readonly expanded: boolean;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  readonly onDoubleClick: () => void;
+  readonly onDoubleClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly selectionMode: boolean;
   readonly isSelected: boolean;
   readonly onToggleSelection: (id: string) => void;
@@ -2777,6 +2928,7 @@ function chatRowClassName(state: {
     state.isActive
       ? "bg-accent text-accent-foreground"
       : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+    SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
   );
 }
 
@@ -2789,7 +2941,6 @@ function ChatRowButton(props: ChatRowButtonProps) {
     artifactType,
     depth,
     isActive,
-    canEdit,
     updatedAt,
     hasChildren,
     expanded,
@@ -2886,10 +3037,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
   );
   const ownerKind = useEpicNodeOwnerKind(nodeId);
 
-  // Only the "⋯" more menu now reveals on hover (the standalone "+" moved into
-  // that menu as "New child agent"), so the single-control pad-right reserve is
-  // claimed whenever the row is editable and not bulk-selecting.
-  const showRowControls = selectionMode ? false : canEdit;
+  const showRowControls = !selectionMode;
   const revealRowControls = useRevealRowControls();
   const rowClassName = chatRowClassName({
     isDragging,
@@ -2962,6 +3110,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         ownerHostUnreachable={false}
         ownerKind={null}
         roleClaims={roleClaims}
+        extraContent={null}
         side="right"
       />
     );
@@ -3089,6 +3238,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
       ownerHostUnreachable={ownerIsUnreachable}
       ownerKind={ownerKind}
       roleClaims={roleClaims}
+      extraContent={null}
       side="right"
     />
   );
@@ -3480,8 +3630,20 @@ function chatRowArchiveState(args: {
 }
 
 interface ChatRowMenuEntriesProps {
+  readonly copyIdEntry: SidebarRowMenuEntry;
   readonly nodeId: string;
   readonly canMutate: boolean;
+  /**
+   * Whether this row's registry-backed mutations can be sent on this
+   * connection. `"unavailable"` disables Rename / Archive / Delete - the three
+   * that reach `ChatRegistryWriter` - with {@link CHAT_NOT_ADOPTED_COPY}.
+   *
+   * Never a doc write: on a host with a record plane the doc is not the
+   * authority, so a local edit loses to record-wins on the next answer and the
+   * affordance reads as working while changing nothing. "Not yet" is a thing
+   * the UI can say. Always `"registry-rpc"` for a non-chat row.
+   */
+  readonly writeRoute: ChatWriteRoute;
   readonly archiveEntry: ChatRowArchiveEntry | null;
   readonly sharingEntry: ChatSharingMenuDecision;
   readonly onNewChildAgent: () => void;
@@ -3489,6 +3651,21 @@ interface ChatRowMenuEntriesProps {
   readonly onToggleArchive: () => void;
   readonly onToggleSharing: () => void;
   readonly onPerformDelete: () => void;
+}
+
+/**
+ * The disabled-tooltip for a registry-backed entry, or `null` when it is not
+ * this gate that is blocking.
+ *
+ * `!canMutate` greys out the whole menu at once, so a per-entry tooltip there
+ * would be noise - the same rule {@link archiveMenuEntries} already follows for
+ * its busy arm.
+ */
+function chatWriteBlockedTooltip(
+  props: ChatRowMenuEntriesProps,
+): string | null {
+  if (!props.canMutate) return null;
+  return props.writeRoute === "unavailable" ? CHAT_NOT_ADOPTED_COPY : null;
 }
 
 /**
@@ -3513,10 +3690,17 @@ function archiveMenuEntries(
       ) : (
         <Archive className="size-3.5" />
       ),
-      disabled: !props.canMutate || archiveEntry.disabled,
+      disabled:
+        !props.canMutate ||
+        archiveEntry.disabled ||
+        props.writeRoute === "unavailable",
       // Only the busy arm explains itself. `!canMutate` greys out every entry
-      // in the menu at once, so a per-entry tooltip there would be noise.
-      disabledTooltip: props.canMutate ? archiveEntry.disabledTooltip : null,
+      // in the menu at once, so a per-entry tooltip there would be noise. The
+      // unadopted arm outranks busy: a row the writer cannot address stays
+      // unaddressable however idle it goes.
+      disabledTooltip:
+        chatWriteBlockedTooltip(props) ??
+        (props.canMutate ? archiveEntry.disabledTooltip : null),
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-archive-item-${props.nodeId}`,
@@ -3631,8 +3815,8 @@ function chatRowMenuEntries(
       id: "rename",
       label: "Rename",
       icon: <Pencil className="size-3.5" />,
-      disabled: !props.canMutate,
-      disabledTooltip: null,
+      disabled: !props.canMutate || props.writeRoute === "unavailable",
+      disabledTooltip: chatWriteBlockedTooltip(props),
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-rename-${props.nodeId}`,
@@ -3642,14 +3826,15 @@ function chatRowMenuEntries(
     },
     ...archiveMenuEntries(props),
     ...sharingMenuEntries(props),
+    props.copyIdEntry,
     { kind: "separator", id: "before-delete" },
     {
       kind: "item",
       id: "delete",
       label: "Delete",
       icon: <Trash2 className="size-3.5" />,
-      disabled: !props.canMutate,
-      disabledTooltip: null,
+      disabled: !props.canMutate || props.writeRoute === "unavailable",
+      disabledTooltip: chatWriteBlockedTooltip(props),
       variant: "destructive",
       testIds: {
         dropdown: `epic-sidebar-delete-${props.nodeId}`,
@@ -3745,8 +3930,8 @@ function useChatRowOwnStatusKind(args: {
  * in the same absolutely-positioned control strip, which is why the row
  * reserves pad-right for two controls while this is mounted.
  *
- * Rendered only for idle rows, so it never covers a status the user needs. No
- * confirm dialog, unlike delete - archiving is reversible.
+ * Idle rows expose the shortcut; a pending menu action also keeps it visible.
+ * Archiving is reversible and needs no confirmation dialog.
  */
 function ChatRowArchiveButton(props: {
   readonly nodeId: string;
@@ -3759,6 +3944,7 @@ function ChatRowArchiveButton(props: {
     ? `Unarchive ${props.nodeName}`
     : `Archive ${props.nodeName}`;
   const revealed = useRevealRowControls();
+  const ArchiveIcon = props.isArchived ? ArchiveRestore : Archive;
   return (
     <TooltipWrapper
       label={label}
@@ -3772,10 +3958,11 @@ function ChatRowArchiveButton(props: {
         size="icon-xs"
         aria-label={label}
         disabled={props.pending}
+        aria-busy={props.pending}
         data-testid={`epic-sidebar-archive-${props.nodeId}`}
         className={cn(
           "absolute right-7 top-1/2 -translate-y-1/2 transition-opacity",
-          revealed
+          revealed || props.pending
             ? "opacity-100"
             : "opacity-0 focus-visible:opacity-100 group-hover/tree-item:opacity-100",
         )}
@@ -3784,10 +3971,14 @@ function ChatRowArchiveButton(props: {
           props.onToggle();
         }}
       >
-        {props.isArchived ? (
-          <ArchiveRestore className="size-3" />
+        {props.pending ? (
+          <AgentSpinningDots
+            className="text-current"
+            testId={`epic-sidebar-archive-pending-${props.nodeId}`}
+            variant={undefined}
+          />
         ) : (
-          <Archive className="size-3" />
+          <ArchiveIcon className="size-3" />
         )}
       </Button>
     </TooltipWrapper>
@@ -3823,7 +4014,7 @@ function ChatMoreMenu(props: {
           <MoreHorizontal className="size-3" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align="end" className="w-max">
         <SidebarDropdownMenuItems entries={entries} />
       </DropdownMenuContent>
     </DropdownMenu>

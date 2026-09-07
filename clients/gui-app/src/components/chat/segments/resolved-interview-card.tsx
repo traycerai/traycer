@@ -23,7 +23,6 @@ import {
   deriveInterviewReviewModel,
 } from "@/components/chat/segments/interview-review-model";
 import {
-  InterviewFraming,
   InterviewDraftStatus,
   InterviewQuestionHeader,
   InterviewQuestionPager,
@@ -138,10 +137,6 @@ export function ResolvedInterviewCard(props: ResolvedInterviewCardProps) {
               <span data-chat-find-unit={summaryFindUnitId ?? undefined}>
                 {model.summary}
               </span>
-              {model.framing.title === null ? null : " · "}
-              {model.framing.title === null ? null : (
-                <span>{model.framing.title}</span>
-              )}
             </span>
             <ChevronRight
               className="size-3.5 shrink-0 text-muted-foreground/65 transition-transform group-data-[state=open]/interview:rotate-90"
@@ -197,22 +192,6 @@ function ResolvedInterviewContent(props: {
       aria-label="Interview review"
       className="mt-1 ml-5 flex min-w-0 flex-col gap-3 rounded-md border border-border/70 bg-card/70 p-3 text-ui-sm shadow-sm"
     >
-      <InterviewFraming
-        title={props.model.framing.title}
-        description={props.model.framing.description}
-        titleFindUnitId={findUnitIdFor(props.model.searchableFields, {
-          fieldKind: "title",
-          questionIndex: null,
-          optionIndex: null,
-          valueIndex: null,
-        })}
-        descriptionFindUnitId={findUnitIdFor(props.model.searchableFields, {
-          fieldKind: "description",
-          questionIndex: null,
-          optionIndex: null,
-          valueIndex: null,
-        })}
-      />
       {props.model.outcome === "carried" ? <CarriedNotice /> : null}
       {page === null ? null : (
         <ReviewPage

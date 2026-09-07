@@ -1,7 +1,7 @@
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
-  HostRequestAuthority,
+  HostRequestOptions,
   IHostMessenger,
   RequestOfMethod,
   ResponseOfMethod,
@@ -35,7 +35,7 @@ export class RemoteHostMessenger<
   request<Method extends keyof RpcRegistry & string>(
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
-    authority: HostRequestAuthority,
+    options: HostRequestOptions,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     // The authority's abort signal is forwarded, not dropped. It is the only
     // way a cancelled read can escape a session that is still dialing now
@@ -48,10 +48,12 @@ export class RemoteHostMessenger<
     return this.session.sendUnary(
       method,
       params,
-      authority.abortSignal,
+      options.idempotencyKey,
+      options.authority.abortSignal,
       // No caller-specific budget: the session's shared
       // `UNARY_RESPONSE_TIMEOUT_MS` applies, as it always has.
       undefined,
+      options.replayMustBeKeyed,
     );
   }
 
@@ -72,13 +74,15 @@ export class RemoteHostMessenger<
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
     responseTimeoutMs: number,
-    authority: HostRequestAuthority,
+    options: HostRequestOptions,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     return this.session.sendUnary(
       method,
       params,
-      authority.abortSignal,
+      options.idempotencyKey,
+      options.authority.abortSignal,
       responseTimeoutMs,
+      options.replayMustBeKeyed,
     );
   }
 }

@@ -50,6 +50,7 @@ function HoverCardTrigger({
 // home elsewhere: copy-path lives on the click-open folder rows (`FolderRow`),
 // and the PR link is also in the Epic history list.
 function HoverCardContent({
+  ref,
   className,
   align = "start",
   sideOffset = 4,
@@ -69,8 +70,8 @@ function HoverCardContent({
   return (
     <HoverCardPrimitive.Portal>
       <HoverCardPrimitive.Content
+        ref={ref}
         data-slot="hover-card-content"
-        data-browser-overlay="hover-card"
         align={align}
         sideOffset={sideOffset}
         collisionPadding={collisionPadding ?? safeAreaInsets}

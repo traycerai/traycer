@@ -280,4 +280,21 @@ describe("hostOptionUpdateBadge", () => {
   it("an idle (up-to-date) host renders no badge at all", () => {
     expect(hostOptionUpdateBadge(viewOf({ kind: "idle" }))).toBeNull();
   });
+
+  // The coarse `kind: "updating"` view — the legacy update path's own signal,
+  // which names no finer phase. It collapses into the same "updating" /
+  // "last seen updating" vocabulary as every other mid-update phase.
+  it("a LIVE 'updating' view reads 'updating'", () => {
+    expect(
+      hostOptionUpdateBadge(viewOf({ kind: "updating", qualified: false })),
+    ).toBe("updating");
+  });
+
+  it("a retained (last-known) 'updating' phase reads 'last seen updating'", () => {
+    expect(
+      hostOptionUpdateBadge(
+        viewOf({ kind: "unknown", lastKnownKind: "updating" }),
+      ),
+    ).toBe("last seen updating");
+  });
 });

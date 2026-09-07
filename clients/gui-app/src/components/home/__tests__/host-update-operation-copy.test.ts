@@ -88,6 +88,49 @@ describe("describeUpdateOperation — retained last-known phase copy", () => {
   });
 });
 
+// The coarse `updateProgress` marker's own view kind. `updating` is the
+// marker's whole vocabulary for "in flight, phase unknown" — the legacy
+// `traycer host update` path names no finer phase, so the sentence must not
+// pretend to one either.
+describe("describeUpdateOperation — the coarse 'updating' kind", () => {
+  it('with no target version, reads "Updating host"', () => {
+    const copy = describeUpdateOperation({
+      view: {
+        ...UNKNOWN_FLEET_UPDATE_VIEW,
+        kind: "updating",
+        qualified: false,
+        progress: { kind: "indeterminate", bytes: null, totalBytes: null },
+      },
+      hostName: "host-a",
+    });
+    expect(copy.primary).toBe("Updating host");
+  });
+
+  it('with a target version, reads "Updating host to v<target>"', () => {
+    const copy = describeUpdateOperation({
+      view: {
+        ...UNKNOWN_FLEET_UPDATE_VIEW,
+        kind: "updating",
+        qualified: false,
+        targetVersion: "2.1.0",
+        progress: { kind: "indeterminate", bytes: null, totalBytes: null },
+      },
+      hostName: "host-a",
+    });
+    expect(copy.primary).toBe("Updating host to v2.1.0");
+  });
+
+  it("showsProgressBar is true for an updating view with indeterminate progress", () => {
+    const view: FleetUpdateView = {
+      ...UNKNOWN_FLEET_UPDATE_VIEW,
+      kind: "updating",
+      qualified: false,
+      progress: { kind: "indeterminate", bytes: null, totalBytes: null },
+    };
+    expect(showsProgressBar(view)).toBe(true);
+  });
+});
+
 // G5: measured byte progress must render independently of percentage — both
 // bytes-only and percent+bytes — and never on the `none` arm.
 describe("operationProgressBytes / operationProgressPercent", () => {

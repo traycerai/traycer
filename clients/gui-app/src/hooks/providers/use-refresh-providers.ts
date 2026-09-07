@@ -2,6 +2,7 @@ import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
@@ -27,7 +28,25 @@ type RefreshContext = {
  * Resolves once the triggered work settles so the caller can drive a spinner.
  */
 export function useRefreshProviders(): () => Promise<void> {
-  const client = useHostClient();
+  return useRefreshProvidersForClient(useHostClient());
+}
+
+/**
+ * Client-scoped form of {@link useRefreshProviders}: the host is whichever one
+ * `client` addresses, so a composer-bound surface (the model picker's refresh
+ * button) refreshes the host its turns run on rather than the app-wide active
+ * host. `null` is "no host resolved yet" and the returned function is a no-op.
+ *
+ * FORCED, not invalidated, and that is the whole point. A plain `providers.list`
+ * refetch serves the last-known verdict, TTL-stale included, while the host
+ * re-probes in the background (`nonBlockingAuth`), so invalidating the query
+ * after the user fixed a credential out-of-band re-rendered the signed-out
+ * verdict it had just been shown. Only `forceAuthRefresh: true` bypasses the
+ * host's cache and poison and answers with a fresh probe.
+ */
+export function useRefreshProvidersForClient(
+  client: HostClient<HostRpcRegistry> | null,
+): () => Promise<void> {
   const queryClient = useQueryClient();
   const mutation = useHostMutation<
     HostRpcRegistry,
@@ -39,7 +58,7 @@ export function useRefreshProviders(): () => Promise<void> {
     mapVariables: (variables: ProvidersListRequest) => variables,
     options: {
       mutationKey: providersMutationKeys.refresh(),
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: async (data: ProvidersListResponse, _variables, ctx) => {
         if (ctx.hostId === null) return;
         // Drops the harness catalogs alongside the list, which is what makes
@@ -67,7 +86,7 @@ export function useRefreshProviders(): () => Promise<void> {
   // refresh control on each provider-fetch tick.
   const { mutateAsync } = mutation;
   return useCallback(async () => {
-    const hostId = client.getActiveHostId();
+    const hostId = client?.getActiveHostId() ?? null;
     if (hostId === null) return;
     getConditionPollEpisodeCoordinator(queryClient).resetQueryByKey(
       hostQueryKeys.method<HostRpcRegistry, "providers.list">(

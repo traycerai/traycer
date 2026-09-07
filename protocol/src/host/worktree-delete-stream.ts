@@ -70,11 +70,11 @@ export type WorktreeDeleteByPathOpenRequestV11 = z.infer<
 >;
 
 /**
- * `worktree.deleteByPath@1.2` open request. `expectedHoldersRevision`
- * matches unary `worktree.delete@1.2`: present with `stopOwners: true`
- * is a digest-equality compare against the fresh inventory before
- * teardown. Absent reproduces @1.1. Present-empty, non-digest, and
- * revision-with-stopOwners-false fail parse.
+ * `worktree.deleteByPath@1.2` open request. `expectedHoldersRevision` is
+ * retained for released-wire compatibility, but hosts accept and ignore it
+ * since consent now covers whichever owners are active when deletion runs.
+ * The existing digest and `stopOwners: true` parse constraints remain frozen.
+ * Remove the field only after the protocol minor-removal window permits it.
  */
 export const worktreeDeleteByPathOpenRequestSchemaV12 =
   worktreeDeleteByPathOpenRequestSchemaV11
@@ -203,12 +203,13 @@ export const worktreeDeleteByPathStreamV11 = defineStreamRpcContract({
 });
 
 /**
- * @1.2 failed frames may carry the unary refusal `code` so a current
- * GUI can distinguish `WORKTREE_HOLDERS_CHANGED` from `WORKTREE_BUSY`
- * without parsing `reason`. Absent on a 1.1 host; a 1.1 client schema
- * strips it. An unknown `code` (a newer host's future value) sanitizes
- * to absent so the terminal `failed` frame still parses — dropping the
- * frame would leave a pending delete unsettled.
+ * @1.2 failed frames retain `holdersRevision` and the
+ * `WORKTREE_HOLDERS_CHANGED` code for released-wire compatibility, but hosts
+ * no longer emit either since consent now covers the worktree rather than a
+ * holder snapshot. Remove them only after the protocol minor-removal window.
+ * An unknown `code` (a newer host's future value) sanitizes to absent so the
+ * terminal `failed` frame still parses — dropping it would leave a pending
+ * delete unsettled.
  */
 export const worktreeDeleteByPathServerFrameSchemaV12 = z.discriminatedUnion(
   "kind",

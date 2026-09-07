@@ -7,7 +7,6 @@ import { useFileEditSession } from "@/hooks/workspace/use-file-edit-session";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import type { FileEditRuntime } from "@/lib/workspace/file-edit-runtime";
 import { languageFromFilePath } from "@/lib/file-change-diff-hunks";
-import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 import {
   createReportIssueContext,
   type ReportIssueContext,
@@ -67,19 +66,24 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { useQueryClient } from "@tanstack/react-query";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   isImageAssetPath,
+  isPdfAssetPath,
   isSvgAssetPath,
 } from "@/lib/assets/image-extension-allowlist";
-import { useImageAsset } from "@/hooks/assets/use-image-asset";
+import { useFileAsset } from "@/hooks/assets/use-file-asset";
+import {
+  PDF_VIEWER_UNAVAILABLE_REASON,
+  PdfPreviewLazy,
+} from "@/components/epic-canvas/pdf-preview/pdf-preview-lazy";
 import {
   DEFAULT_ANIMATION_MS,
   ImagePreview,
 } from "@/components/epic-canvas/image-preview/image-preview";
 import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
-import { useEditorOpenForClient } from "@/hooks/editor/use-editor-open-mutation";
-import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
+import { useEffectiveDefaultEditor } from "@/hooks/editor/use-effective-default-editor";
+import { usePdfOpenExternallyTarget } from "@/hooks/editor/use-pdf-open-target";
+import { useWorkspaceFileOpenExternally } from "@/hooks/editor/use-workspace-file-open-externally";
 const MAX_MARKDOWN_PREVIEW_CHARS = 100_000;
 
 type WorkspaceFileViewMode = "source" | "preview";
@@ -163,7 +167,25 @@ function WorkspaceFileTileRouter(props: {
   const { node } = props;
   const isImage = isImageAssetPath(node.filePath);
   const isSvg = isSvgAssetPath(node.filePath);
+  const isPdf = isPdfAssetPath(node.filePath);
   const [viewAsSource, setViewAsSource] = useState(false);
+  // PDF needs `workspace.streamAsset >= 1.1` (the minor that taught the host
+  // `application/pdf`), and the STREAM's own negotiation is the only
+  // authority on that: stream methods never reach the unary openAck manifest
+  // the negotiated-version registry records, so no client-side version gate
+  // can ever positively know a host is old. The asset hook maps an old host's
+  // refusal to the shared fallback placeholder (honest copy + Open
+  // Externally) - that IS the old-host path.
+
+  if (isPdf) {
+    return (
+      <WorkspacePdfFileTile
+        node={node}
+        viewTabId={props.viewTabId}
+        revealTarget={props.revealTarget}
+      />
+    );
+  }
 
   if (!isImage) {
     return (
@@ -212,7 +234,7 @@ function WorkspaceFileTileRouter(props: {
 }
 
 /**
- * Image mode for a workspace file tile: fetches over `useImageAsset` (never
+ * Image mode for a workspace file tile: fetches over `useFileAsset` (never
  * `workspace.readFile`) and renders `ImagePreview`, or the shared
  * `BinaryPlaceholder` for a `fallback` status - uniformly, regardless of
  * WHY the fetch fell back (image-preview decision log, decision #14).
@@ -225,7 +247,7 @@ function WorkspaceImageFileTile(props: {
   readonly svgToggle: ReactNode;
 }) {
   const { node, revealTarget } = props;
-  const assetState = useImageAsset({
+  const assetState = useFileAsset({
     method: "workspace",
     workspacePath: node.workspacePath,
     filePath: node.filePath,
@@ -237,31 +259,15 @@ function WorkspaceImageFileTile(props: {
   // tile renders straight from `assetState.status` like every other
   // failure - no local decode-failed flag to track or reset.
   const handleDecodeError = assetState.reportDecodeFailure;
-  const defaultEditor = useSettingsStore((s) => s.defaultEditor);
-  // The file this tile shows lives on the TAB's host; opening it app-wide would
-  // ask whichever machine the app is pointed at for a path it may not have.
-  const editorOpen = useEditorOpenForClient(useTabHostClient(), "file");
+  const openTarget = useEffectiveDefaultEditor(node.hostId);
   const {
-    active: openExternallyFeedbackActive,
-    trigger: triggerOpenExternallyFeedback,
-  } = useEditorOpenFeedback();
-  const openExternallyOpening =
-    editorOpen.isPending || openExternallyFeedbackActive;
-  const handleOpenExternally = useCallback(() => {
-    if (openExternallyOpening) return;
-    triggerOpenExternallyFeedback();
-    editorOpen.mutate({
-      editorId: defaultEditor ?? "vscode",
-      paths: [resolveAbsolutePath(node.workspacePath, node.filePath)],
-    });
-  }, [
-    defaultEditor,
-    editorOpen,
-    node.filePath,
-    node.workspacePath,
-    openExternallyOpening,
-    triggerOpenExternallyFeedback,
-  ]);
+    opening: openExternallyOpening,
+    onOpenExternally: handleOpenExternally,
+  } = useWorkspaceFileOpenExternally({
+    workspacePath: node.workspacePath,
+    filePath: node.filePath,
+    target: openTarget,
+  });
 
   // No line-goto in image mode - a reveal target aimed at this file can never
   // be consumed here, so evict it immediately rather than stranding it on the
@@ -275,7 +281,7 @@ function WorkspaceImageFileTile(props: {
   if (assetState.status === "fallback") {
     return (
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
-        <WorkspaceImageFileToolbar
+        <WorkspaceMediaFileToolbar
           filePath={node.filePath}
           svgToggle={props.svgToggle}
           openExternally={null}
@@ -296,7 +302,7 @@ function WorkspaceImageFileTile(props: {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
-      <WorkspaceImageFileToolbar
+      <WorkspaceMediaFileToolbar
         filePath={node.filePath}
         svgToggle={props.svgToggle}
         openExternally={{
@@ -324,7 +330,164 @@ function WorkspaceImageFileTile(props: {
   );
 }
 
-function WorkspaceImageFileToolbar(props: {
+/**
+ * PDF mode for a workspace file tile: same shape as the image mode above -
+ * `useFileAsset` for the bytes, `BinaryPlaceholder` for any fallback,
+ * uniformly - but the ready state hands the blob to the lazy-loaded pdf.js
+ * viewer instead of an `<img>`. Only mounted behind the router's
+ * `workspace.streamAsset >= 1.1` gate.
+ */
+function WorkspacePdfFileTile(props: {
+  readonly node: WorkspaceFileRef;
+  readonly viewTabId: string;
+  readonly revealTarget: WorkspaceFileRevealTarget | null;
+}) {
+  const { node, revealTarget } = props;
+  const assetState = useFileAsset({
+    method: "workspace",
+    workspacePath: node.workspacePath,
+    filePath: node.filePath,
+  });
+  const handleRenderFailure = assetState.reportDecodeFailure;
+  // The viewer itself could not load or start on this device (old engine) -
+  // distinct from a decode failure: the bytes are fine, so the blob stays
+  // cached and Open Externally remains the way to read the file.
+  const [viewerUnavailable, setViewerUnavailable] = useState(false);
+  const handleViewerUnavailable = useCallback(
+    () => setViewerUnavailable(true),
+    [],
+  );
+  // PDFs open with the OS default application when the host speaks
+  // editor.openPaths >= 1.1; older hosts keep the default-editor behavior.
+  const openTarget = usePdfOpenExternallyTarget(node.hostId);
+  const {
+    opening: openExternallyOpening,
+    onOpenExternally: handleOpenExternally,
+  } = useWorkspaceFileOpenExternally({
+    workspacePath: node.workspacePath,
+    filePath: node.filePath,
+    target: openTarget,
+  });
+
+  // No line-goto in PDF mode either - evict a reveal target immediately
+  // rather than stranding it (same rationale as the image mode above).
+  useEffect(() => {
+    if (revealTarget !== null) {
+      clearWorkspaceFileRevealTarget(props.viewTabId, node.id);
+    }
+  }, [revealTarget, props.viewTabId, node.id]);
+
+  if (assetState.status === "fallback" || viewerUnavailable) {
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
+        <WorkspaceMediaFileToolbar
+          filePath={node.filePath}
+          svgToggle={null}
+          openExternally={null}
+        />
+        <div className="min-h-0 flex-1">
+          <BinaryPlaceholder
+            fileName={node.name}
+            sizeBytes={assetState.totalBytes}
+            reason={
+              viewerUnavailable
+                ? PDF_VIEWER_UNAVAILABLE_REASON
+                : assetState.reason
+            }
+            onOpenExternally={handleOpenExternally}
+            openExternallyOpening={openExternallyOpening}
+            compact={false}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (assetState.status === "ready" && assetState.url !== null) {
+    // The viewer's toolbar is the tile's ONE bar: it carries the file path
+    // as its caption and the tile's Open Externally action - a second
+    // path/actions bar above it would repeat both.
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
+        <PdfPreviewLazy
+          url={assetState.url}
+          fileName={node.filePath}
+          compact={false}
+          toolbarActions={
+            <OpenExternallyIconButton
+              onOpenExternally={handleOpenExternally}
+              opening={openExternallyOpening}
+            />
+          }
+          onRenderFailure={handleRenderFailure}
+          onUnavailable={handleViewerUnavailable}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
+      <WorkspaceMediaFileToolbar
+        filePath={node.filePath}
+        svgToggle={null}
+        openExternally={{
+          onOpenExternally: handleOpenExternally,
+          opening: openExternallyOpening,
+        }}
+      />
+      <div className="min-h-0 flex-1">
+        <div className="flex size-full items-center justify-center">
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OpenExternallyIconButton(props: {
+  readonly onOpenExternally: () => void;
+  readonly opening: boolean;
+}) {
+  return (
+    <TooltipWrapper
+      label="Open externally"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        disabled={props.opening}
+        onClick={props.onOpenExternally}
+        aria-label="Open externally"
+      >
+        {props.opening ? (
+          <AgentSpinningDots
+            className="size-4"
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : (
+          <ExternalLinkIcon className="size-4" />
+        )}
+      </Button>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * Toolbar for the MEDIA tile modes (image, and PDF outside its ready state -
+ * the ready PDF viewer brings its own). Distinct from `WorkspaceFileToolbar`
+ * below, the text/markdown tile's toolbar.
+ */
+function WorkspaceMediaFileToolbar(props: {
   readonly filePath: string;
   readonly svgToggle: ReactNode;
   readonly openExternally: {
@@ -342,31 +505,10 @@ function WorkspaceImageFileToolbar(props: {
       </StartTruncatedText>
       {props.svgToggle}
       {props.openExternally !== null ? (
-        <TooltipWrapper
-          label="Open externally"
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={props.openExternally.opening}
-            onClick={props.openExternally.onOpenExternally}
-            aria-label="Open externally"
-          >
-            {props.openExternally.opening ? (
-              <AgentSpinningDots
-                className="size-4"
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : (
-              <ExternalLinkIcon className="size-4" />
-            )}
-          </Button>
-        </TooltipWrapper>
+        <OpenExternallyIconButton
+          onOpenExternally={props.openExternally.onOpenExternally}
+          opening={props.openExternally.opening}
+        />
       ) : null}
     </div>
   );

@@ -15,6 +15,7 @@ import {
   defineRpcContract,
   defineUpgradePath,
   defineVersionedRpcRegistry,
+  UNARY_CAPABILITY_IDEMPOTENCY_KEY,
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import {
@@ -43,6 +44,7 @@ import type {
   WebSocketMessageEvent,
   WebSocketOpenEvent,
 } from "../ws-factory";
+import type { DialPriority } from "../dial-priority";
 import {
   HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
   WsRpcClient,
@@ -60,6 +62,7 @@ import type {
   ClientRequestFrame,
   ClientFatalErrorFrame,
   HostFrame,
+  HostOpenAckFrame,
 } from "@traycer/protocol/framework/ws-protocol";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
@@ -102,6 +105,7 @@ type RecordedSocket = {
   readonly url: string;
   readonly socket: StubWebSocket;
   readonly sent: ClientFrame[];
+  readonly priority: DialPriority;
 };
 
 class StubWebSocket implements WebSocketLike {
@@ -159,9 +163,9 @@ function makeFactory(): {
 } {
   const sockets: RecordedSocket[] = [];
   const factory: IWebSocketFactory = {
-    create(url: string): WebSocketLike {
+    create(url: string, priority: DialPriority): WebSocketLike {
       const socket = new StubWebSocket();
-      sockets.push({ url, socket, sent: socket.sentFrames });
+      sockets.push({ url, socket, sent: socket.sentFrames, priority });
       return socket;
     },
   };
@@ -195,7 +199,11 @@ class BoundWsRpcClient<Registry extends VersionedRpcRegistry> {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    return this.inner.request(method, params, this.authority);
+    return this.inner.request(method, params, {
+      replayMustBeKeyed: false,
+      idempotencyKey: null,
+      authority: this.authority,
+    });
   }
 
   requestWithResponseTimeout<Method extends keyof Registry & string>(
@@ -207,7 +215,11 @@ class BoundWsRpcClient<Registry extends VersionedRpcRegistry> {
       method,
       params,
       responseTimeoutMs,
-      this.authority,
+      {
+        replayMustBeKeyed: false,
+        idempotencyKey: null,
+        authority: this.authority,
+      },
     );
   }
 }
@@ -270,7 +282,11 @@ async function expectPostOpenTimeoutRecovery(fatal: HostFrame): Promise<void> {
   });
   const authority = authorityForToken("token-abc");
 
-  const pending = client.request("host.echo", { message: "hi" }, authority);
+  const pending = client.request(
+    "host.echo",
+    { message: "hi" },
+    { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+  );
   await flush();
   sockets[0].socket.fireOpen();
   await flush();
@@ -349,7 +365,7 @@ function expectTerminalFrame(frame: ClientFrame): ClientFatalErrorFrame {
 function openAckWithOptionalHostEcho(version: {
   readonly major: number;
   readonly minor: number;
-}): HostFrame {
+}): HostOpenAckFrame {
   return {
     kind: "openAck",
     manifest: {
@@ -358,6 +374,19 @@ function openAckWithOptionalHostEcho(version: {
     optionalManifest: {
       "host.echo": version,
     },
+  };
+}
+
+function openAckWithOptionalHostEchoAndCapabilities(
+  version: {
+    readonly major: number;
+    readonly minor: number;
+  },
+  capabilities: readonly string[],
+): HostOpenAckFrame {
+  return {
+    ...openAckWithOptionalHostEcho(version),
+    capabilities,
   };
 }
 
@@ -607,7 +636,11 @@ describe("WsRpcClient", () => {
     const pending = client.request(
       "host.echo",
       { message: "hi" },
-      authorityForToken("token-abc"),
+      {
+        idempotencyKey: null,
+        authority: authorityForToken("token-abc"),
+        replayMustBeKeyed: false,
+      },
     );
     await flush();
     sockets[0].socket.fireOpen();
@@ -673,6 +706,7 @@ describe("WsRpcClient", () => {
       method: "host.echo",
       schemaVersion: { major: 1, minor: 0, supportedMajors: [1] },
       params: { message: "hi" },
+      idempotencyKey: null,
     });
     expect(stub.closed).toBeNull();
 
@@ -687,6 +721,214 @@ describe("WsRpcClient", () => {
 
     await expect(pending).resolves.toEqual({ echoed: "HI" });
     expect(stub.closed).toEqual({ code: 1000, reason: "ok" });
+  });
+
+  it("dials the priority `dialPriorityForMethod` computes for the method, not a literal - background for a listed method, interactive for an unlisted one", async () => {
+    const { factory, sockets } = makeFactory();
+    let nextRequestId = 0;
+    const client = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: testRegistry,
+      requestId: () => `req-priority-${(nextRequestId += 1)}`,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const authority = authorityForToken("token-abc");
+
+    // "host.status" is on `dial-priority.ts`'s background list.
+    const backgroundPending = client.request(
+      "host.status",
+      {},
+      { idempotencyKey: null, authority, replayMustBeKeyed: false },
+    );
+    await flush();
+    // "host.echo" is not - it must fall through to the interactive default.
+    const interactivePending = client.request(
+      "host.echo",
+      { message: "hi" },
+      { idempotencyKey: null, authority, replayMustBeKeyed: false },
+    );
+    await flush();
+
+    expect(sockets).toHaveLength(2);
+    expect(sockets[0].priority).toBe("background");
+    expect(sockets[1].priority).toBe("interactive");
+
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    const statusRequest = expectRequestFrame(sockets[0].sent[1]);
+    sockets[0].socket.fireMessage({
+      kind: "response",
+      requestId: statusRequest.requestId,
+      method: statusRequest.method,
+      schemaVersion: statusRequest.schemaVersion,
+      result: { ready: true },
+      error: null,
+    });
+    await expect(backgroundPending).resolves.toEqual({ ready: true });
+
+    sockets[1].socket.fireOpen();
+    await flush();
+    sockets[1].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    const echoRequest = expectRequestFrame(sockets[1].sent[1]);
+    sockets[1].socket.fireMessage({
+      kind: "response",
+      requestId: echoRequest.requestId,
+      method: echoRequest.method,
+      schemaVersion: echoRequest.schemaVersion,
+      result: { echoed: "HI" },
+      error: null,
+    });
+    await expect(interactivePending).resolves.toEqual({ echoed: "HI" });
+  });
+
+  it("strips a requested idempotency key on a legacy openAck and classifies post-send loss as unknown", async () => {
+    const { factory, sockets } = makeFactory();
+    const raw = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: testRegistry,
+      requestId: () => "req-legacy-key",
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      frameTimeoutMs: 1_000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const pending = raw.request(
+      "host.echo",
+      { message: "hi" },
+      {
+        replayMustBeKeyed: false,
+        idempotencyKey: "requested-key",
+        authority: authorityForToken("token-abc"),
+      },
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEchoAndCapabilities({ major: 1, minor: 0 }, [
+        "future.capability",
+      ]),
+    );
+    await flush();
+
+    expect(expectRequestFrame(sockets[0].sent[1]).idempotencyKey).toBeNull();
+    sockets[0].socket.fireError("connection dropped after dispatch");
+
+    await expect(pending).rejects.toBeInstanceOf(HostTransportFailureError);
+    await expect(pending).rejects.not.toBeInstanceOf(RetryableTransportError);
+  });
+
+  it("sends a requested key only after unary idempotency negotiation and keeps post-send loss retryable", async () => {
+    const { factory, sockets } = makeFactory();
+    const raw = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: testRegistry,
+      requestId: () => "req-keyed",
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      frameTimeoutMs: 1_000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const pending = raw.request(
+      "host.echo",
+      { message: "hi" },
+      {
+        replayMustBeKeyed: false,
+        idempotencyKey: "requested-key",
+        authority: authorityForToken("token-abc"),
+      },
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEchoAndCapabilities({ major: 1, minor: 0 }, [
+        UNARY_CAPABILITY_IDEMPOTENCY_KEY,
+      ]),
+    );
+    await flush();
+
+    expect(expectRequestFrame(sockets[0].sent[1]).idempotencyKey).toBe(
+      "requested-key",
+    );
+    sockets[0].socket.fireError("connection dropped after dispatch");
+
+    await expect(pending).rejects.toBeInstanceOf(RetryableTransportError);
+    // The CLASS on its own does not say why the retry is safe, and the two
+    // grounds are not interchangeable: this one is safe only while the host
+    // keeps deduplicating the key, which is what `createRetryingMessenger`
+    // reads to require a key on the next attempt.
+    await expect(pending).rejects.toMatchObject({ replaySafetyFromKey: true });
+  });
+
+  it("refuses to dispatch a replay the negotiated connection cannot key", async () => {
+    const { factory, sockets } = makeFactory();
+    const raw = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: testRegistry,
+      requestId: () => "req-unkeyable-replay",
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      frameTimeoutMs: 1_000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const pending = raw.request(
+      "host.echo",
+      { message: "hi" },
+      {
+        // What `createRetryingMessenger` sets after a post-send loss that only
+        // a negotiated key made retryable.
+        replayMustBeKeyed: true,
+        idempotencyKey: "requested-key",
+        authority: authorityForToken("token-abc"),
+      },
+    );
+    // Captured BEFORE the first `flush()`, unlike the sibling tests above. The
+    // refusal lands while the openAck is being consumed, several microtask
+    // turns before an `expect(...).rejects` could attach - so deferring the
+    // handler leaves the tick in between with an unhandled rejection, and
+    // vitest fails the whole file on it while every assertion still passes.
+    const outcome = pending.then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEchoAndCapabilities({ major: 1, minor: 0 }, [
+        // The re-dial landed on an incarnation without unary idempotency. The
+        // sibling test above proves this same openAck strips the key and sends
+        // anyway on a FIRST attempt, which is correct there and a second
+        // undeduplicated execution here.
+        "future.capability",
+      ]),
+    );
+    await flush();
+
+    // `sent[0]` is the open frame. Nothing followed it: the refusal is the
+    // point, so a rejection alone would not distinguish this from dispatching
+    // and then failing.
+    expect(sockets[0].sent).toHaveLength(1);
+    const error: unknown = await outcome;
+    expect(error).toBeInstanceOf(HostTransportFailureError);
+    // Deliberately NOT retryable: the first attempt may already have
+    // committed, so the honest answer is ambiguity, not a third attempt.
+    expect(error).not.toBeInstanceOf(RetryableTransportError);
   });
 
   it("aborting the captured authority closes and settles the in-flight socket", async () => {
@@ -706,12 +948,16 @@ describe("WsRpcClient", () => {
       "host.echo",
       { message: "hi" },
       {
-        endpoint: {
-          hostId: mockLocalHostEntry.hostId,
-          websocketUrl: mockLocalHostEntry.websocketUrl,
+        replayMustBeKeyed: false,
+        idempotencyKey: null,
+        authority: {
+          endpoint: {
+            hostId: mockLocalHostEntry.hostId,
+            websocketUrl: mockLocalHostEntry.websocketUrl,
+          },
+          bearer: new MutableBearerLease("token-abc", "test-user"),
+          abortSignal: lifetime.signal,
         },
-        bearer: new MutableBearerLease("token-abc", "test-user"),
-        abortSignal: lifetime.signal,
       },
     );
     await flush();
@@ -783,12 +1029,16 @@ describe("WsRpcClient", () => {
         "host.echo",
         { message: "hi" },
         {
-          endpoint: {
-            hostId: mockLocalHostEntry.hostId,
-            websocketUrl: mockLocalHostEntry.websocketUrl,
+          replayMustBeKeyed: false,
+          idempotencyKey: null,
+          authority: {
+            endpoint: {
+              hostId: mockLocalHostEntry.hostId,
+              websocketUrl: mockLocalHostEntry.websocketUrl,
+            },
+            bearer: new MutableBearerLease("token-abc", "test-user"),
+            abortSignal: signal,
           },
-          bearer: new MutableBearerLease("token-abc", "test-user"),
-          abortSignal: signal,
         },
       );
     }
@@ -889,9 +1139,17 @@ describe("WsRpcClient", () => {
 
     // Fire two overlapping RPCs to the SAME host - neither awaited before the
     // next is started, so both sockets are open at once.
-    const pending1 = client.request("host.echo", { message: "one" }, authority);
+    const pending1 = client.request(
+      "host.echo",
+      { message: "one" },
+      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+    );
     await flush();
-    const pending2 = client.request("host.echo", { message: "two" }, authority);
+    const pending2 = client.request(
+      "host.echo",
+      { message: "two" },
+      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+    );
     await flush();
     expect(sockets).toHaveLength(2);
 
@@ -972,7 +1230,7 @@ describe("WsRpcClient", () => {
     const pendingOld = oldClient.request(
       "host.echo",
       { message: "old" },
-      authority,
+      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
     );
     await flush();
     sockets[0].socket.fireOpen();
@@ -984,7 +1242,7 @@ describe("WsRpcClient", () => {
     const pendingNew = newClient.request(
       "host.echo",
       { message: "new" },
-      authority,
+      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
     );
     await flush();
     sockets[1].socket.fireOpen();
@@ -1045,12 +1303,16 @@ describe("WsRpcClient", () => {
       "host.echo",
       { message: "hi" },
       {
-        endpoint: {
-          hostId: mockLocalHostEntry.hostId,
-          websocketUrl: mockLocalHostEntry.websocketUrl,
+        replayMustBeKeyed: false,
+        idempotencyKey: null,
+        authority: {
+          endpoint: {
+            hostId: mockLocalHostEntry.hostId,
+            websocketUrl: mockLocalHostEntry.websocketUrl,
+          },
+          bearer: new MutableBearerLease("token-abc", "test-user"),
+          abortSignal: lifetime.signal,
         },
-        bearer: new MutableBearerLease("token-abc", "test-user"),
-        abortSignal: lifetime.signal,
       },
     );
     await flush();
@@ -1070,7 +1332,11 @@ describe("WsRpcClient", () => {
     const pending2 = client.request(
       "host.echo",
       { message: "hi again" },
-      authorityForToken("token-abc"),
+      {
+        idempotencyKey: null,
+        authority: authorityForToken("token-abc"),
+        replayMustBeKeyed: false,
+      },
     );
     await flush();
     expect(sockets).toHaveLength(2);
@@ -1342,138 +1608,6 @@ describe("WsRpcClient", () => {
     expect(sockets[0].socket.sent).toHaveLength(0);
   });
 
-  it("maps a dial timeout to RPC_ERROR", async () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient({
-      factory,
-      authToken: "t",
-      requestId: "req-dial-timeout",
-      dialTimeoutMs: 25,
-      frameTimeoutMs: 1000,
-      hostAttestationWindowMs: undefined,
-    });
-
-    const pending = client.request("host.echo", { message: "x" });
-    await flush();
-    expect(sockets).toHaveLength(1);
-
-    await expect(pending).rejects.toSatisfy((error: unknown) => {
-      return (
-        error instanceof HostRpcError &&
-        error.code === "RPC_ERROR" &&
-        error.message.includes("dial timed out")
-      );
-    });
-  });
-
-  it("maps a frame timeout (no openAck) to RPC_ERROR", async () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient({
-      factory,
-      authToken: "t",
-      requestId: "req-frame-timeout",
-      dialTimeoutMs: 1000,
-      frameTimeoutMs: 25,
-      hostAttestationWindowMs: undefined,
-    });
-
-    const pending = client.request("host.echo", { message: "x" });
-    await flush();
-    sockets[0].socket.fireOpen();
-    await flush();
-
-    await expect(pending).rejects.toSatisfy((error: unknown) => {
-      return (
-        error instanceof HostRpcError &&
-        error.code === "RPC_ERROR" &&
-        error.message.includes("frame timed out")
-      );
-    });
-  });
-
-  it("maps a malformed host frame to RPC_ERROR", async () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient({
-      factory,
-      authToken: "t",
-      requestId: "req-malformed",
-      dialTimeoutMs: 1000,
-      frameTimeoutMs: 1000,
-      hostAttestationWindowMs: undefined,
-    });
-
-    const pending = client.request("host.echo", { message: "x" });
-    await flush();
-    sockets[0].socket.fireOpen();
-    await flush();
-
-    sockets[0].socket.fireRawMessage(
-      JSON.stringify({
-        kind: "fatalError",
-        details: {
-          code: "INCOMPATIBLE",
-          reason: "broken payload",
-          incompatibleMethods: [],
-          upgradeGuidance: {
-            clientShouldUpgrade: "yes",
-            hostShouldUpgrade: false,
-          },
-        },
-      }),
-    );
-
-    await expect(pending).rejects.toSatisfy((error: unknown) => {
-      return (
-        error instanceof HostRpcError &&
-        error.code === "RPC_ERROR" &&
-        error.requestId === "req-malformed" &&
-        error.method === "host.echo" &&
-        error.message.includes("Malformed host frame:")
-      );
-    });
-  });
-
-  it("classifies a dial timeout as a retryable transport error", async () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient({
-      factory,
-      authToken: "t",
-      requestId: "req-dial-retryable",
-      dialTimeoutMs: 25,
-      frameTimeoutMs: 1000,
-      hostAttestationWindowMs: undefined,
-    });
-
-    const pending = client.request("host.echo", { message: "x" });
-    await flush();
-    expect(sockets).toHaveLength(1);
-
-    await expect(pending).rejects.toBeInstanceOf(RetryableTransportError);
-  });
-
-  it("classifies a close-before-open as a retryable transport error", async () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient({
-      factory,
-      authToken: "t",
-      requestId: "req-close-retryable",
-      dialTimeoutMs: 1000,
-      frameTimeoutMs: 1000,
-      hostAttestationWindowMs: undefined,
-    });
-
-    const pending = client.request("host.echo", { message: "x" });
-    await flush();
-    sockets[0].socket.fireClose(1006, "abnormal", false);
-
-    await expect(pending).rejects.toSatisfy(
-      (error: unknown) =>
-        error instanceof RetryableTransportError &&
-        error.code === "RPC_ERROR" &&
-        error.message.includes("closed before open"),
-    );
-  });
-
   it("classifies a handshake (pre-openAck) frame timeout as retryable", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient({
@@ -1691,7 +1825,15 @@ describe("WsRpcClient", () => {
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
       });
 
-      const pending = client.request("host.echo", { message: "hi" }, authority);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
       await driveUntilRequestSent(sockets);
 
       // Client response deadline fires first at 15s; grace = 50_000 - 15_000.
@@ -1724,7 +1866,15 @@ describe("WsRpcClient", () => {
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
       });
 
-      const pending = client.request("host.echo", { message: "hi" }, authority);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
       await driveUntilRequestSent(sockets);
 
       // Client deadline equals the host's 30s post-open timer; grace = 20s.
@@ -1756,7 +1906,15 @@ describe("WsRpcClient", () => {
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
       });
 
-      const pending = client.request("host.echo", { message: "hi" }, authority);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
       await driveUntilRequestSent(sockets);
 
       // Client fires first at 30s; grace = 50_000 - 30_000 = 20s (expires at 50s).
@@ -1792,7 +1950,15 @@ describe("WsRpcClient", () => {
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
       });
 
-      const pending = client.request("host.echo", { message: "hi" }, authority);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
       // Attach before timers fire so the rejection is not unhandled under fake timers.
       const rejection = expect(pending).rejects.toSatisfy(
         (error: unknown) =>
@@ -1930,7 +2096,11 @@ describe("WsRpcClient", () => {
         const pending = client.request(
           "host.echo",
           { message: "hi" },
-          authority,
+          {
+            idempotencyKey: null,
+            authority: authority,
+            replayMustBeKeyed: false,
+          },
         );
         const rejection = expect(pending).rejects.toSatisfy(
           (error: unknown) =>
@@ -1979,7 +2149,15 @@ describe("WsRpcClient", () => {
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
       });
 
-      const pending = client.request("host.echo", { message: "hi" }, authority);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
       await driveUntilRequestSent(sockets);
 
       // Response deadline → grace armed (window 30s + delivery 5s).
@@ -2008,14 +2186,50 @@ describe("WsRpcClient", () => {
 
       await completeRetriedSocket(sockets, 1);
       await expect(pending).resolves.toEqual({ echoed: "HI" });
+    }); /**
+     * Long-poll budgets (e.g. providers.awaitLogin at 16 min) outlast the 50s
+     * window. They no longer get zero grace: the response-timeout callback
+     * still arms a finite delivery floor so a late-firing host attestation can
+     * recover on a fresh socket when the client callback wins on wake.
+     */
+    it("long-poll deadline overdue on wake keeps a delivery floor and recovers on typed attestation", async () => {
+      const { factory, sockets } = makeFactory();
+      const { client, authCalls, authority } = makeGraceRecoveryStack({
+        factory,
+        frameTimeoutMs: 1_000,
+        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
+      });
+
+      const pending = client.requestWithResponseTimeout(
+        "host.echo",
+        { message: "slow" },
+        LONG_POLL_RESPONSE_TIMEOUT_MS,
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
+      await driveUntilRequestSent(sockets);
+
+      // Advance the full long-poll budget so the response-timeout callback wins
+      // on wake. Discriminator: socket stays open (delivery floor armed).
+      await vi.advanceTimersByTimeAsync(LONG_POLL_RESPONSE_TIMEOUT_MS);
+      expect(sockets[0].socket.closed).toBeNull();
+
+      sockets[0].socket.fireMessage(typedPostOpenTimeoutFatal);
+      await flushFake();
+
+      for (let attempt = 0; attempt < 10 && sockets.length < 2; attempt += 1) {
+        await flushFake();
+      }
+      expect(sockets).toHaveLength(2);
+      expect(authCalls.count).toBe(0);
+
+      await completeRetriedSocket(sockets, 1);
+      await expect(pending).resolves.toEqual({ echoed: "HI" });
     });
 
-    /**
-     * Models suspend *inside* the delivery leg. Jumping the fake wall clock
-     * with `setSystemTime` before advancing the 5s delivery timer makes the
-     * callback observe a large overshoot (suspension), so production re-arms a
-     * fresh awake delivery leg instead of ending the call.
-     */
     it("suspend during delivery leg: overdue expiry on wake keeps the socket open for typed attestation recovery", async () => {
       const { factory, sockets } = makeFactory();
       const { client, authCalls, authority } = makeGraceRecoveryStack({
@@ -2024,7 +2238,15 @@ describe("WsRpcClient", () => {
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
       });
 
-      const pending = client.request("host.echo", { message: "hi" }, authority);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
       await driveUntilRequestSent(sockets);
 
       // Response deadline → grace armed; window leg → delivery leg armed (t=45s).
@@ -2055,127 +2277,6 @@ describe("WsRpcClient", () => {
       await expect(pending).resolves.toEqual({ echoed: "HI" });
     });
 
-    /**
-     * The bound is active time, not suspension count: every late delivery
-     * re-arms, and the grace ends only when a delivery leg gets its full
-     * awake slack with no wall-clock jump.
-     */
-    it("repeated delivery-leg suspensions re-arm past any count cap; an uninterrupted leg ends the grace", async () => {
-      const { factory, sockets } = makeFactory();
-      const { client, authority } = makeGraceRecoveryStack({
-        factory,
-        frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
-        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
-      });
-
-      const pending = client.request("host.echo", { message: "hi" }, authority);
-      const rejection = expect(pending).rejects.toSatisfy(
-        (error: unknown) =>
-          error instanceof HostTransportFailureError &&
-          !(error instanceof RetryableTransportError) &&
-          error.message.includes(
-            `frame timed out after ${CLI_FRAME_TIMEOUT_MS}ms`,
-          ),
-      );
-      await driveUntilRequestSent(sockets);
-
-      await vi.advanceTimersByTimeAsync(CLI_FRAME_TIMEOUT_MS);
-      await vi.advanceTimersByTimeAsync(
-        HOST_ATTESTATION_WINDOW_MS -
-          CLI_FRAME_TIMEOUT_MS -
-          ATTESTATION_DELIVERY_SLACK_MS,
-      );
-      expect(sockets[0].socket.closed).toBeNull();
-
-      // Cross the former count cap (3) decisively — no suspension count limit.
-      for (let i = 0; i < REPEATED_SUSPENSION_CYCLES; i += 1) {
-        vi.setSystemTime(Date.now() + SUSPEND_JUMP_MS);
-        await vi.advanceTimersByTimeAsync(ATTESTATION_DELIVERY_SLACK_MS);
-        expect(sockets[0].socket.closed).toBeNull();
-      }
-
-      // Finite in active time: one uninterrupted delivery leg settles.
-      await vi.advanceTimersByTimeAsync(ATTESTATION_DELIVERY_SLACK_MS);
-      await rejection;
-      expect(sockets).toHaveLength(1);
-    });
-
-    it("ordinary delivery-leg jitter below suspension tolerance ends grace without re-arming", async () => {
-      const { factory, sockets } = makeFactory();
-      const { client, authority } = makeGraceRecoveryStack({
-        factory,
-        frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
-        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
-      });
-
-      const pending = client.request("host.echo", { message: "hi" }, authority);
-      const rejection = expect(pending).rejects.toSatisfy(
-        (error: unknown) =>
-          error instanceof HostTransportFailureError &&
-          !(error instanceof RetryableTransportError) &&
-          error.message.includes(
-            `frame timed out after ${CLI_FRAME_TIMEOUT_MS}ms`,
-          ),
-      );
-      await driveUntilRequestSent(sockets);
-
-      await vi.advanceTimersByTimeAsync(CLI_FRAME_TIMEOUT_MS);
-      await vi.advanceTimersByTimeAsync(
-        HOST_ATTESTATION_WINDOW_MS -
-          CLI_FRAME_TIMEOUT_MS -
-          ATTESTATION_DELIVERY_SLACK_MS,
-      );
-      expect(sockets[0].socket.closed).toBeNull();
-
-      // Overshoot of 500ms is below the 1s suspension tolerance → not forgiven.
-      vi.setSystemTime(
-        Date.now() + Math.floor(SUSPENSION_OVERSHOOT_TOLERANCE_MS / 2),
-      );
-      await vi.advanceTimersByTimeAsync(ATTESTATION_DELIVERY_SLACK_MS);
-      await rejection;
-      expect(sockets).toHaveLength(1);
-    });
-
-    /**
-     * Long-poll budgets (e.g. providers.awaitLogin at 16 min) outlast the 50s
-     * window. They no longer get zero grace: the response-timeout callback
-     * still arms a finite delivery floor so a late-firing host attestation can
-     * recover on a fresh socket when the client callback wins on wake.
-     */
-    it("long-poll deadline overdue on wake keeps a delivery floor and recovers on typed attestation", async () => {
-      const { factory, sockets } = makeFactory();
-      const { client, authCalls, authority } = makeGraceRecoveryStack({
-        factory,
-        frameTimeoutMs: 1_000,
-        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
-      });
-
-      const pending = client.requestWithResponseTimeout(
-        "host.echo",
-        { message: "slow" },
-        LONG_POLL_RESPONSE_TIMEOUT_MS,
-        authority,
-      );
-      await driveUntilRequestSent(sockets);
-
-      // Advance the full long-poll budget so the response-timeout callback wins
-      // on wake. Discriminator: socket stays open (delivery floor armed).
-      await vi.advanceTimersByTimeAsync(LONG_POLL_RESPONSE_TIMEOUT_MS);
-      expect(sockets[0].socket.closed).toBeNull();
-
-      sockets[0].socket.fireMessage(typedPostOpenTimeoutFatal);
-      await flushFake();
-
-      for (let attempt = 0; attempt < 10 && sockets.length < 2; attempt += 1) {
-        await flushFake();
-      }
-      expect(sockets).toHaveLength(2);
-      expect(authCalls.count).toBe(0);
-
-      await completeRetriedSocket(sockets, 1);
-      await expect(pending).resolves.toEqual({ echoed: "HI" });
-    });
-
     it("long-poll delivery-floor grace is finite: expires as original non-retryable timeout without a second dial", async () => {
       const { factory, sockets } = makeFactory();
       const { client, authority } = makeGraceRecoveryStack({
@@ -2188,7 +2289,11 @@ describe("WsRpcClient", () => {
         "host.echo",
         { message: "slow" },
         LONG_POLL_RESPONSE_TIMEOUT_MS,
-        authority,
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
       );
       const rejection = expect(pending).rejects.toSatisfy(
         (error: unknown) =>
@@ -2208,7 +2313,6 @@ describe("WsRpcClient", () => {
       await rejection;
       expect(sockets).toHaveLength(1);
     });
-
     it("close during grace keeps the original ambiguous response timeout without a second dial", async () => {
       const { factory, sockets } = makeFactory();
       const client = makeClient({
@@ -2243,111 +2347,6 @@ describe("WsRpcClient", () => {
       // failAll must dispose the armed grace timer (window/delivery leg).
       expect(vi.getTimerCount()).toBe(0);
     });
-
-    it("transport error during grace keeps the original ambiguous response timeout without a second dial", async () => {
-      const { factory, sockets } = makeFactory();
-      const client = makeClient({
-        factory,
-        authToken: "t",
-        requestId: "req-grace-sticky-error",
-        dialTimeoutMs: 1_000,
-        frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
-        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
-      });
-
-      const pending = client.request("host.echo", { message: "x" });
-      const rejection = expect(pending).rejects.toSatisfy(
-        (error: unknown) =>
-          error instanceof HostTransportFailureError &&
-          !(error instanceof RetryableTransportError) &&
-          error.message.includes(
-            `frame timed out after ${CLI_FRAME_TIMEOUT_MS}ms`,
-          ) &&
-          !error.message.includes("WebSocket closed before next frame") &&
-          !error.message.includes("WebSocket transport error:") &&
-          !error.message.includes("Malformed host frame:"),
-      );
-      await driveUntilRequestSent(sockets);
-
-      await vi.advanceTimersByTimeAsync(CLI_FRAME_TIMEOUT_MS);
-      expect(sockets[0].socket.closed).toBeNull();
-
-      sockets[0].socket.fireError("ECONNRESET");
-      await rejection;
-      expect(sockets).toHaveLength(1);
-      expect(vi.getTimerCount()).toBe(0);
-    });
-
-    it("malformed JSON during grace keeps the original ambiguous response timeout without a second dial", async () => {
-      const { factory, sockets } = makeFactory();
-      const client = makeClient({
-        factory,
-        authToken: "t",
-        requestId: "req-grace-sticky-raw",
-        dialTimeoutMs: 1_000,
-        frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
-        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
-      });
-
-      const pending = client.request("host.echo", { message: "x" });
-      const rejection = expect(pending).rejects.toSatisfy(
-        (error: unknown) =>
-          error instanceof HostTransportFailureError &&
-          !(error instanceof RetryableTransportError) &&
-          error.message.includes(
-            `frame timed out after ${CLI_FRAME_TIMEOUT_MS}ms`,
-          ) &&
-          !error.message.includes("WebSocket closed before next frame") &&
-          !error.message.includes("WebSocket transport error:") &&
-          !error.message.includes("Malformed host frame:"),
-      );
-      await driveUntilRequestSent(sockets);
-
-      await vi.advanceTimersByTimeAsync(CLI_FRAME_TIMEOUT_MS);
-      expect(sockets[0].socket.closed).toBeNull();
-
-      sockets[0].socket.fireRawMessage("not json");
-      await rejection;
-      expect(sockets).toHaveLength(1);
-      expect(vi.getTimerCount()).toBe(0);
-    });
-
-    it("invalid frame shape during grace keeps the original ambiguous response timeout without a second dial", async () => {
-      const { factory, sockets } = makeFactory();
-      const client = makeClient({
-        factory,
-        authToken: "t",
-        requestId: "req-grace-sticky-shape",
-        dialTimeoutMs: 1_000,
-        frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
-        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
-      });
-
-      const pending = client.request("host.echo", { message: "x" });
-      const rejection = expect(pending).rejects.toSatisfy(
-        (error: unknown) =>
-          error instanceof HostTransportFailureError &&
-          !(error instanceof RetryableTransportError) &&
-          error.message.includes(
-            `frame timed out after ${CLI_FRAME_TIMEOUT_MS}ms`,
-          ) &&
-          !error.message.includes("WebSocket closed before next frame") &&
-          !error.message.includes("WebSocket transport error:") &&
-          !error.message.includes("Malformed host frame:"),
-      );
-      await driveUntilRequestSent(sockets);
-
-      await vi.advanceTimersByTimeAsync(CLI_FRAME_TIMEOUT_MS);
-      expect(sockets[0].socket.closed).toBeNull();
-
-      // Valid JSON that fails hostFrameSchema (missing required response fields).
-      sockets[0].socket.fireRawMessage(
-        JSON.stringify({ kind: "response", requestId: "x" }),
-      );
-      await rejection;
-      expect(sockets).toHaveLength(1);
-    });
-
     it("zero attestation window settles a post-send response timeout at the caller deadline with no delivery tail", async () => {
       const { factory, sockets } = makeFactory();
       const client = makeClient({
@@ -2394,12 +2393,16 @@ describe("WsRpcClient", () => {
         "host.echo",
         { message: "hi" },
         {
-          endpoint: {
-            hostId: mockLocalHostEntry.hostId,
-            websocketUrl: mockLocalHostEntry.websocketUrl,
+          replayMustBeKeyed: false,
+          idempotencyKey: null,
+          authority: {
+            endpoint: {
+              hostId: mockLocalHostEntry.hostId,
+              websocketUrl: mockLocalHostEntry.websocketUrl,
+            },
+            bearer: new MutableBearerLease("token-abc", "test-user"),
+            abortSignal: lifetime.signal,
           },
-          bearer: new MutableBearerLease("token-abc", "test-user"),
-          abortSignal: lifetime.signal,
         },
       );
       const rejection = expect(pending).rejects.toBeInstanceOf(
@@ -2416,57 +2419,6 @@ describe("WsRpcClient", () => {
         code: 1000,
         reason: "authority-aborted",
       });
-      expect(vi.getTimerCount()).toBe(0);
-    });
-
-    it("aborting after a re-armed delivery leg clears timers and settles with HostRequestAbortedError", async () => {
-      const { factory, sockets } = makeFactory();
-      const lifetime = new AbortController();
-      const client = new WsRpcClient<typeof testRegistry>({
-        clientIdentity: TEST_CLIENT_IDENTITY,
-        registry: testRegistry,
-        requestId: () => "req-grace-abort-rearmed",
-        webSocketFactory: factory,
-        dialTimeoutMs: 1_000,
-        frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
-        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
-        evidence: NO_TRANSPORT_EVIDENCE,
-      });
-      const pending = client.request(
-        "host.echo",
-        { message: "hi" },
-        {
-          endpoint: {
-            hostId: mockLocalHostEntry.hostId,
-            websocketUrl: mockLocalHostEntry.websocketUrl,
-          },
-          bearer: new MutableBearerLease("token-abc", "test-user"),
-          abortSignal: lifetime.signal,
-        },
-      );
-      const rejection = expect(pending).rejects.toBeInstanceOf(
-        HostRequestAbortedError,
-      );
-      await driveUntilRequestSent(sockets);
-
-      // Arm grace, fire the window leg, then suspend so delivery re-arms.
-      await vi.advanceTimersByTimeAsync(CLI_FRAME_TIMEOUT_MS);
-      await vi.advanceTimersByTimeAsync(
-        HOST_ATTESTATION_WINDOW_MS -
-          CLI_FRAME_TIMEOUT_MS -
-          ATTESTATION_DELIVERY_SLACK_MS,
-      );
-      vi.setSystemTime(Date.now() + SUSPEND_JUMP_MS);
-      await vi.advanceTimersByTimeAsync(ATTESTATION_DELIVERY_SLACK_MS);
-      expect(sockets[0].socket.closed).toBeNull();
-
-      lifetime.abort("host-replaced");
-      await rejection;
-      expect(sockets[0].socket.closed).toEqual({
-        code: 1000,
-        reason: "authority-aborted",
-      });
-      // Disposal must cover the re-armed delivery timer, not only the first leg.
       expect(vi.getTimerCount()).toBe(0);
     });
   });
@@ -2947,6 +2899,7 @@ describe("WsRpcClient", () => {
       method: "host.status",
       schemaVersion: { major: 1, minor: 0 },
       params: {},
+      idempotencyKey: null,
     });
     expect(sockets[0].socket.closed).toBeNull();
 
@@ -3170,6 +3123,7 @@ describe("WsRpcClient", () => {
         method: "host.status",
         schemaVersion: { major: 1, minor: 0 },
         params: {},
+        idempotencyKey: null,
       });
 
       sockets[0].socket.fireMessage({
@@ -3216,6 +3170,7 @@ describe("WsRpcClient", () => {
         method: "host.status",
         schemaVersion: { major: 1, minor: 0 },
         params: {},
+        idempotencyKey: null,
       });
 
       sockets[0].socket.fireMessage({

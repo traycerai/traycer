@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   registerTileSurfaceGeometryHost,
   registerTileSurfaceGeometrySlot,
+  remeasureTileSurfaceGeometry,
   resetTileSurfaceGeometryCoordinatorForTesting,
   type TileSurfaceRect,
 } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
@@ -175,6 +176,47 @@ describe("host-root movement invalidates every registered slot", () => {
     expect(rectsA).toEqual([{ left: 100, top: 100, width: 50, height: 50 }]);
     expect(rectsB).toEqual([{ left: 300, top: 300, width: 50, height: 50 }]);
     expect(hostRectRead).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("explicit remeasure (position-only move)", () => {
+  it("re-applies every registered slot's rect on an explicit remeasure when only its position changed and no RO callback fired", () => {
+    const host = document.createElement("div");
+    stubRect(host, { left: 0, top: 0, width: 1000, height: 600 });
+    registerTileSurfaceGeometryHost(host);
+
+    const slotA = document.createElement("div");
+    stubRect(slotA, { left: 0, top: 0, width: 500, height: 600 });
+    const rectsA: TileSurfaceRect[] = [];
+    registerTileSurfaceGeometrySlot("chat-a", slotA, (rect) =>
+      rectsA.push(rect),
+    );
+
+    const slotB = document.createElement("div");
+    stubRect(slotB, { left: 500, top: 0, width: 500, height: 600 });
+    const rectsB: TileSurfaceRect[] = [];
+    registerTileSurfaceGeometrySlot("chat-b", slotB, (rect) =>
+      rectsB.push(rect),
+    );
+
+    rectsA.length = 0;
+    rectsB.length = 0;
+
+    // Position-only move: ONLY `left` changes, width/height stay identical -
+    // exactly the "Reverse views" swap condition (`swapSplitSides`) that a
+    // ResizeObserver cannot see, since it only fires on a SIZE change.
+    stubRect(slotA, { left: 500, top: 0, width: 500, height: 600 });
+    stubRect(slotB, { left: 0, top: 0, width: 500, height: 600 });
+
+    // No RO callback is triggered here - proves the RO path alone cannot see
+    // a position-only move: nothing has been delivered yet.
+    expect(rectsA).toEqual([]);
+    expect(rectsB).toEqual([]);
+
+    remeasureTileSurfaceGeometry();
+
+    expect(rectsA).toEqual([{ left: 500, top: 0, width: 500, height: 600 }]);
+    expect(rectsB).toEqual([{ left: 0, top: 0, width: 500, height: 600 }]);
   });
 });
 

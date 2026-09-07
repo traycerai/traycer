@@ -22,6 +22,7 @@
     "./host/*": "./src/host/*.ts",
     "./host-transport/mux": "./src/host-transport/mux.ts",
     "./host-transport/chunking": "./src/host-transport/chunking.ts",
+    "./host-transport/relay-attach-url": "./src/host-transport/relay-attach-url.ts",
     "./host-transport/relay-liveness": "./src/host-transport/relay-liveness.ts",
     "./host-transport/rtt-deadlines": "./src/host-transport/rtt-deadlines.ts",
     "./host-transport/vantage": "./src/host-transport/vantage.ts",
@@ -93,6 +94,10 @@
         "types": "./dist/src/host-transport/chunking.d.ts",
         "import": "./dist/src/host-transport/chunking.js"
       },
+      "./host-transport/relay-attach-url": {
+        "types": "./dist/src/host-transport/relay-attach-url.d.ts",
+        "import": "./dist/src/host-transport/relay-attach-url.js"
+      },
       "./host-transport/relay-liveness": {
         "types": "./dist/src/host-transport/relay-liveness.d.ts",
         "import": "./dist/src/host-transport/relay-liveness.js"
@@ -144,13 +149,13 @@
     "lint": "oxlint -c oxlint.config.ts --fix --deny-warnings ."
   },
   "dependencies": {
-    "@noble/curves": "^2.3.0",
+    "@noble/curves": "^2.4.0",
     "async-mutex": "^0.5.0",
     "fflate": "^0.8.3",
     "tldts": "7.4.10",
     "y-utility": "^0.1.4",
     "yjs": "^13.6.32",
-    "zod": "^4.4.3"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "catalog:",

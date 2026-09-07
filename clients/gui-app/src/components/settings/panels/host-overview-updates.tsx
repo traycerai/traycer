@@ -3,11 +3,12 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { HostOverviewNotice } from "@/components/settings/panels/host-overview-status-card";
 import {
-  describeCliShellFailure,
   describeOverviewDegrade,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
 import type { HostOverviewUpdatesSummary } from "@/components/settings/panels/host-overview-updates-state";
+import { CliFloorRemedyActions } from "@/components/settings/panels/host-overview-cli-floor-remedy-actions";
+import type { DesktopAppUpdatesBridge } from "@/lib/windows/types";
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +23,8 @@ import { cn } from "@/lib/utils";
 export function HostOverviewUpdatesRegion(props: {
   readonly summary: HostOverviewUpdatesSummary;
   readonly degrade: OverviewDegradeReason | null;
+  readonly desktopBridge: DesktopAppUpdatesBridge | null;
+  readonly onInstallationHelp: () => void;
 }): ReactNode {
   const { summary } = props;
   if (props.degrade !== null) {
@@ -60,25 +63,11 @@ export function HostOverviewUpdatesRegion(props: {
             SETTINGS_ROW_STACK.control,
           )}
         >
-          {summary.updatableVersion === null ? null : (
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              disabled={summary.busy || summary.installing || summary.checking}
-              data-testid="host-overview-update-now"
-              onClick={summary.onUpdateLatest}
-            >
-              {summary.installing ? (
-                <AgentSpinningDots
-                  className="mr-2 size-3"
-                  testId={undefined}
-                  variant={undefined}
-                />
-              ) : null}
-              Update now
-            </Button>
-          )}
+          <OverviewUpdateControl
+            summary={summary}
+            desktopBridge={props.desktopBridge}
+            onInstallationHelp={props.onInstallationHelp}
+          />
           <Button
             type="button"
             variant="ghost"
@@ -98,11 +87,48 @@ export function HostOverviewUpdatesRegion(props: {
           </Button>
         </div>
       </div>
-      {summary.transientFailure === null ? null : (
+      {summary.failureDescription === null ? null : (
         <HostOverviewNotice testId="host-overview-update-attempt-failed">
-          {describeCliShellFailure(summary.transientFailure, summary.hostName)}
+          {summary.failureDescription}
         </HostOverviewNotice>
       )}
     </div>
+  );
+}
+
+function OverviewUpdateControl(props: {
+  readonly summary: HostOverviewUpdatesSummary;
+  readonly desktopBridge: DesktopAppUpdatesBridge | null;
+  readonly onInstallationHelp: () => void;
+}): ReactNode {
+  const { summary } = props;
+  if (summary.remedy !== null) {
+    return (
+      <CliFloorRemedyActions
+        actions={summary.remedy.actions}
+        desktopBridge={props.desktopBridge}
+        onHelp={props.onInstallationHelp}
+      />
+    );
+  }
+  if (summary.updatableVersion === null) return null;
+  return (
+    <Button
+      type="button"
+      variant="default"
+      size="sm"
+      disabled={summary.busy || summary.installing || summary.checking}
+      data-testid="host-overview-update-now"
+      onClick={summary.onUpdateLatest}
+    >
+      {summary.installing ? (
+        <AgentSpinningDots
+          className="mr-2 size-3"
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
+      Update now
+    </Button>
   );
 }

@@ -1,6 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
 import type { SyntheticEvent } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import {
@@ -11,13 +17,10 @@ import {
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-const openExternalLink = vi.hoisted(() => ({
-  isPending: false,
-  mutate: vi.fn(),
-}));
+const openLink = vi.hoisted(() => vi.fn());
 
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => openExternalLink,
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLink,
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
@@ -59,6 +62,9 @@ function makeController(
     profile: "primary",
     url: "https://example.com",
     addressValue: "https://example.com",
+    selectAddressOnFocus: false,
+    setAddressInput: () => undefined,
+    focusAddress: () => undefined,
     canGoBack: true,
     canGoForward: true,
     zoomPercent: 100,
@@ -90,6 +96,7 @@ function renderToolbar(
       <BrowserTileToolbar
         controller={makeController(capabilities, annotation)}
         pictureInPicture={null}
+        loading={false}
       />
     </TooltipProvider>,
   );
@@ -133,7 +140,7 @@ function queryChrome(query: {
 describe("<BrowserTileToolbar /> capability gating", () => {
   afterEach(() => {
     cleanup();
-    openExternalLink.mutate.mockClear();
+    openLink.mockClear();
   });
 
   it("renders every chrome control when all capabilities are true", () => {
@@ -170,7 +177,11 @@ describe("<BrowserTileToolbar /> capability gating", () => {
     };
     render(
       <TooltipProvider>
-        <BrowserTileToolbar controller={controller} pictureInPicture={null} />
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
       </TooltipProvider>,
     );
 
@@ -216,8 +227,10 @@ describe("<BrowserTileToolbar /> capability gating", () => {
       screen.getByRole("button", { name: "Open in default browser" }),
     );
 
-    expect(openExternalLink.mutate).toHaveBeenCalledExactlyOnceWith(
+    expect(openLink).toHaveBeenCalledExactlyOnceWith(
       "https://example.com",
+      "app",
+      null,
     );
   });
 
@@ -228,6 +241,7 @@ describe("<BrowserTileToolbar /> capability gating", () => {
         <BrowserTileToolbar
           controller={makeController(DISABLED_CAPABILITIES, null)}
           pictureInPicture={{ disabled: false, convert }}
+          loading={false}
         />
       </TooltipProvider>,
     );
@@ -249,7 +263,11 @@ describe("<BrowserTileToolbar /> capability gating", () => {
     };
     render(
       <TooltipProvider>
-        <BrowserTileToolbar controller={controller} pictureInPicture={null} />
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
       </TooltipProvider>,
     );
 
@@ -330,7 +348,11 @@ describe("<BrowserTileToolbar /> clear cookies for this site", () => {
   function renderWith(controller: TileController): void {
     render(
       <TooltipProvider>
-        <BrowserTileToolbar controller={controller} pictureInPicture={null} />
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
       </TooltipProvider>,
     );
   }
@@ -423,5 +445,108 @@ describe("<BrowserTileToolbar /> clear cookies for this site", () => {
     fireEvent.click(screen.getByTestId("confirm-cancel"));
 
     expect(onClearSite).not.toHaveBeenCalled();
+  });
+});
+
+describe("<BrowserTileToolbar /> address first-focus", () => {
+  afterEach(cleanup);
+
+  it("prevents the first mousedown default so a full-URL selection survives mouseup", () => {
+    const controller: TileController = {
+      ...makeController(PRIMARY_TILE_CHROME_CAPABILITIES, ANNOTATION),
+      selectAddressOnFocus: true,
+    };
+    render(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
+      </TooltipProvider>,
+    );
+
+    const input = screen.getByRole("textbox", { name: "Browser address" });
+    expect(document.activeElement).not.toBe(input);
+
+    const first = createEvent.mouseDown(input, { button: 0 });
+    fireEvent(input, first);
+    expect(first.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(input);
+
+    const second = createEvent.mouseDown(input, { button: 0 });
+    fireEvent(input, second);
+    expect(second.defaultPrevented).toBe(false);
+  });
+
+  it("does not prevent the first mousedown when selectAddressOnFocus is false", () => {
+    renderToolbar(PRIMARY_TILE_CHROME_CAPABILITIES, ANNOTATION);
+
+    const input = screen.getByRole("textbox", { name: "Browser address" });
+    expect(document.activeElement).not.toBe(input);
+
+    const first = createEvent.mouseDown(input, { button: 0 });
+    fireEvent(input, first);
+    expect(first.defaultPrevented).toBe(false);
+  });
+});
+
+describe("<BrowserTileToolbar /> reload loading", () => {
+  afterEach(cleanup);
+
+  it("moves the spinner into Reload while loading and restores it when idle", () => {
+    const onReload = vi.fn();
+    const controller: TileController = {
+      ...makeController(PRIMARY_TILE_CHROME_CAPABILITIES, ANNOTATION),
+      onReload,
+    };
+    const { rerender } = render(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
+      </TooltipProvider>,
+    );
+
+    const reload = (): HTMLElement =>
+      screen.getByRole("button", { name: "Reload" });
+
+    expect(reload()).toHaveProperty("disabled", false);
+    expect(reload().getAttribute("aria-busy")).not.toBe("true");
+    expect(screen.queryByTestId("browser-reload-loading")).toBeNull();
+
+    rerender(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading
+        />
+      </TooltipProvider>,
+    );
+
+    expect(reload()).toHaveProperty("disabled", false);
+    expect(reload().getAttribute("aria-busy")).toBe("true");
+    const spinner = screen.getByTestId("browser-reload-loading");
+    expect(reload().contains(spinner)).toBe(true);
+
+    fireEvent.click(reload());
+    expect(onReload).toHaveBeenCalledOnce();
+
+    rerender(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(reload()).toHaveProperty("disabled", false);
+    expect(reload().getAttribute("aria-busy")).not.toBe("true");
+    expect(screen.queryByTestId("browser-reload-loading")).toBeNull();
   });
 });

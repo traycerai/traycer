@@ -9,6 +9,7 @@
     "build:web": "vite build --config vite.config.ts",
     "build:web:staging": "TRAYCER_MOBILE_ENV=staging vite build --config vite.config.ts",
     "dev:web": "vite --config vite.config.ts",
+    "dev:web:bundled": "bun scripts/dev-web-bundled.ts",
     "dev:ios": "bun scripts/dev-ios.ts",
     "dev:ios:device": "bun scripts/dev-ios-device.ts",
     "sync:ios": "bun run build:web && bun x cap sync ios",
@@ -38,6 +39,7 @@
     "@capacitor/network": "8.0.1",
     "@capacitor/push-notifications": "8.1.2",
     "@capacitor/share": "8.0.1",
+    "@sentry/browser": "catalog:",
     "capacitor-native-settings": "8.2.0",
     "capacitor-secure-storage-plugin": "0.13.0",
     "react": "catalog:",
@@ -46,6 +48,7 @@
   "devDependencies": {
     "@capacitor/cli": "8.4.2",
     "@rolldown/plugin-babel": "catalog:",
+    "@sentry/vite-plugin": "catalog:",
     "@tailwindcss/vite": "catalog:",
     "@tanstack/router-plugin": "catalog:",
     "@types/node": "catalog:",

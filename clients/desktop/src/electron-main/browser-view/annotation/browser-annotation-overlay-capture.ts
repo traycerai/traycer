@@ -10,8 +10,6 @@ import { boundedString } from "../guards";
  */
 export function captureOverlayElement(el: Element): Record<string, unknown> {
   const rect = el.getBoundingClientRect().toJSON();
-  const html = String(el instanceof HTMLElement ? el.outerHTML || "" : "");
-  const truncated = html.length > ELEMENT_PICKER_LIMITS.outerHtml;
   return {
     selector: boundedString(
       selectorPath(el),
@@ -27,11 +25,6 @@ export function captureOverlayElement(el: Element): Record<string, unknown> {
       ? boundedString(el.id, ELEMENT_PICKER_LIMITS.attributeValue, "")
       : null,
     classNames: classNamesOf(el),
-    attributes: attributesOf(el),
-    outerHtml: truncated
-      ? html.slice(0, ELEMENT_PICKER_LIMITS.outerHtml)
-      : html,
-    outerHtmlTruncated: truncated,
     textPreview: textOf(el),
     ariaRole: roleOf(el),
     accessibleName: accessibleNameOf(el),
@@ -75,28 +68,6 @@ function classNamesOf(el: Element): string[] {
     if (name) {
       out.push(boundedString(name, ELEMENT_PICKER_LIMITS.className, ""));
     }
-  }
-  return out;
-}
-
-function attributesOf(el: Element): { name: string; value: string }[] {
-  const out: { name: string; value: string }[] = [];
-  const attrs = el.attributes ? el.attributes : [];
-  for (
-    let i = 0;
-    i < attrs.length && out.length < ELEMENT_PICKER_LIMITS.attributeCount;
-    i += 1
-  ) {
-    const attr = attrs[i];
-    if (attr === undefined) continue;
-    out.push({
-      name: boundedString(attr.name, 120, ""),
-      value: boundedString(
-        attr.value,
-        ELEMENT_PICKER_LIMITS.attributeValue,
-        "",
-      ),
-    });
   }
   return out;
 }

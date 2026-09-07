@@ -51,7 +51,7 @@ export function SwitcherTerminalsList(props: SwitcherListProps) {
   const { epicId, tabId, onClose } = props;
   const panel = useEpicTerminalsPanel({ epicId });
   const canMutate = isEditableRole(useEpicPermissionRole());
-  const activate = useSwitcherActivate(epicId, tabId, onClose);
+  const activate = useSwitcherActivate(tabId, onClose);
 
   const prepareOpenRow = panel.prepareOpenRow;
   const openRow = useCallback(

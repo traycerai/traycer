@@ -16,6 +16,12 @@ import { UntrustedSvgLightbox } from "@/components/chat/segments/untrusted-svg-l
 import { sanitizeUntrustedSvg } from "@/lib/images/untrusted-svg";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
+const openLink = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLink,
+  useOpenLinkWithPending: () => ({ isPending: false, openLink }),
+}));
+
 const saveBlobToDiskMock = vi.hoisted(() =>
   vi.fn<
     (
@@ -138,6 +144,7 @@ beforeEach(() => {
   copyImageMock.mockReset();
   copyImageMock.mockResolvedValue(undefined);
   trustedMarkupSpy.mockClear();
+  openLink.mockClear();
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
@@ -317,10 +324,7 @@ describe("<ImageLightbox /> actions", () => {
     expect(typeof blob.arrayBuffer).toBe("function");
   });
 
-  it("opens CORS-less HTTPS images through the runner host", async () => {
-    const openExternalLink = vi
-      .spyOn(runnerHost, "openExternalLink")
-      .mockResolvedValue(undefined);
+  it("opens CORS-less HTTPS images through openLink", async () => {
     renderWithRunner(
       <ImageLightbox
         src="https://cdn.example.com/no-cors.png"
@@ -336,8 +340,16 @@ describe("<ImageLightbox /> actions", () => {
     expect(screen.queryByRole("button", { name: "Copy image" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Open in browser" }));
     await waitFor(() => {
-      expect(openExternalLink).toHaveBeenCalledWith(
+      expect(openLink).toHaveBeenCalledWith(
         "https://cdn.example.com/no-cors.png",
+        "image",
+        expect.objectContaining({
+          altKey: false,
+          ctrlKey: false,
+          metaKey: false,
+          shiftKey: false,
+          button: 0,
+        }),
       );
     });
     expect(fetch).not.toHaveBeenCalled();

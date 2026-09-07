@@ -55,19 +55,26 @@ describe("resolveCreateProfileGate", () => {
     );
   });
 
-  // Unified gate: terminalLogin present but no real oauthArgs must read the
-  // same as "not a terminal-login provider" here too - the generic reason,
-  // not the terminal-specific one.
-  it("uses the generic reason, not the terminal one, when oauthArgs is empty", () => {
-    const gate = resolveCreateProfileGate(true, {
-      oauthArgs: [],
-      token: null,
-      codePaste: null,
-      terminalLogin: {},
-    });
-    expect(gate.disabled).toBe(true);
-    expect(gate.reason).toBe(
-      "Add profiles from a local host with browser sign-in available.",
-    );
-  });
+  // A launch-the-CLI provider (Qwen, Droid, OMP, OpenCode) declares
+  // `terminalLogin` with `oauthArgs: null`. The terminal reason must still
+  // win: the generic one names browser sign-in, which these providers do not
+  // do either. `[]` is covered beside `null` because those are the two
+  // spellings of "no headless command", and the gate that used to fall
+  // through to the generic reason treated them alike - so a regression that
+  // restored it would have to redden both.
+  it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
+    "uses the terminal reason for a terminal-login provider with no oauthArgs (%o)",
+    ({ oauthArgs }) => {
+      const gate = resolveCreateProfileGate(true, {
+        oauthArgs,
+        token: null,
+        codePaste: null,
+        terminalLogin: {},
+      });
+      expect(gate.disabled).toBe(true);
+      expect(gate.reason).toBe(
+        "This provider is signed in from a terminal, not the browser.",
+      );
+    },
+  );
 });

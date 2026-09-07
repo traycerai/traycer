@@ -293,6 +293,15 @@ function renderDiffContentBody(args: {
   const diffUnsafeCSS = args.nonEmptyEditorReady
     ? `${DIFF_PANEL_WITH_FIND_UNSAFE_CSS}\n/* traycer-edit-cache-ready */`
     : DIFF_PANEL_WITH_FIND_UNSAFE_CSS;
+  // Ahead of every branch below, including the empty-file editor: the gate is
+  // what holds a `@pierre/diffs` component back until the worker pool is in
+  // context, and a component that mounts without one highlights on the main
+  // thread for the rest of its life (see `use-diff-highlight-ready.ts`). An
+  // empty new file is the one surface where that lifetime is spent growing -
+  // the person is typing into it - so it is the last place to skip the wait.
+  if (!args.highlightReady) {
+    return <DiffHighlightLoading testId="diff-highlighting" />;
+  }
   if (emptyFileEditSession !== null) {
     return (
       <File
@@ -310,9 +319,6 @@ function renderDiffContentBody(args: {
         }}
       />
     );
-  }
-  if (!args.highlightReady) {
-    return <DiffHighlightLoading testId="diff-highlighting" />;
   }
   return args.fileDiffs.map((fileDiff) => (
     <FileDiff

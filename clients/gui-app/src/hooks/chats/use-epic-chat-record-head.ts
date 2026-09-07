@@ -8,7 +8,7 @@ import { chatRecordKey } from "@/stores/epics/open-epic/chat-record-head";
  * chat, or `null` - no publication yet, an owner host that predates the head
  * on the row, or no epic session to read.
  *
- * ## Keyed on the record IDENTITY, read off the raw rows
+ * ## Keyed on the record IDENTITY, read off the head plane
  *
  * `(ownerUserId, chatId)`, never `chatId` alone: the id is host-minted and a
  * collaborator can hold the same one under this task. And it reads
@@ -19,8 +19,9 @@ import { chatRecordKey } from "@/stores/epics/open-epic/chat-record-head";
  * ## A selector, so a head change re-renders only its subscriber
  *
  * The stamp objects in the table are stable across publishes that leave them
- * unchanged (see `mergeChatRecordRow`), so `useSyncExternalStore` compares
- * by identity and a metadata-only row write costs this subscriber nothing.
+ * unchanged (see `applyChatRecordHeadRows`), so `useSyncExternalStore`
+ * compares by identity and a metadata-only row write costs this subscriber
+ * nothing.
  *
  * ## `epicId` is a guard, not a lookup
  *

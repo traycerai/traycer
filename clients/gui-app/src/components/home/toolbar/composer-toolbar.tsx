@@ -8,6 +8,7 @@ import type { ComposerDictationControl } from "@/components/home/toolbar/compose
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 
 interface ComposerToolbarProps {
   /** Per-composer toolbar store; this component subscribes to the slices the
@@ -40,6 +41,9 @@ interface ComposerToolbarProps {
    *  prop of the same name. */
   createProfileHostId: string | null;
   readonly runTargetHostId: string | null;
+  /** Where the picker's setup terminal lands - see `HarnessModelPicker`'s
+   *  prop of the same name. */
+  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
 }
 
 function ComposerToolbarImpl(props: ComposerToolbarProps) {
@@ -59,6 +63,7 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     settingsLocked,
     createProfileHostId,
     runTargetHostId,
+    terminalLoginSurface,
   } = props;
 
   // Left-group slices. The store is the single source for harness-level
@@ -117,6 +122,7 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
             dictationPreparing={dictationPreparing}
             createProfileHostId={createProfileHostId}
             runTargetHostId={runTargetHostId}
+            terminalLoginSurface={terminalLoginSurface}
           />
         </>
       )}

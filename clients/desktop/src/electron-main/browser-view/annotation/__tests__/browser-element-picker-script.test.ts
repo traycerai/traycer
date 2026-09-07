@@ -43,13 +43,10 @@ describe("sanitizeElementCapture", () => {
     if (element === null) throw new Error("expected capture");
     expect(element.selector.length).toBe(ELEMENT_PICKER_LIMITS.selector);
     expect(element.tagName).toBe("button");
-    expect(element.outerHtml.length).toBe(ELEMENT_PICKER_LIMITS.outerHtml);
-    expect(element.attributes.length).toBe(
-      ELEMENT_PICKER_LIMITS.attributeCount,
-    );
-    expect(element.attributes[0].value.length).toBe(
-      ELEMENT_PICKER_LIMITS.attributeValue,
-    );
+    // Markup and raw attributes are no longer part of a capture: they are
+    // dropped by the schema, not merely bounded.
+    expect(element).not.toHaveProperty("outerHtml");
+    expect(element).not.toHaveProperty("attributes");
     expect(element.classNames).toEqual(["keep", "keep2"]);
     expect(element.computedStyles.length).toBe(
       ELEMENT_PICKER_LIMITS.styleCount,

@@ -14,9 +14,9 @@ import {
   screen,
 } from "@testing-library/react";
 import type {
-  ImageAssetMeta,
-  UseImageAssetResult,
-} from "@/hooks/assets/use-image-asset";
+  FileAssetMeta,
+  UseFileAssetResult,
+} from "@/hooks/assets/use-file-asset";
 import type { ImagePreviewTransformState } from "../image-preview-transform";
 
 interface MockTransformRef {
@@ -81,8 +81,8 @@ interface MockTransformWrapperProps {
 const state = vi.hoisted(() => ({
   instances: [] as Array<MockTransformInstance>,
   nextId: 0,
-  oldAsset: null as UseImageAssetResult | null,
-  newAsset: null as UseImageAssetResult | null,
+  oldAsset: null as UseFileAssetResult | null,
+  newAsset: null as UseFileAssetResult | null,
   stageRect: { width: 800, height: 600 },
 }));
 
@@ -311,8 +311,8 @@ vi.mock("react-zoom-pan-pinch", () => {
   return { TransformWrapper, TransformComponent };
 });
 
-vi.mock("@/hooks/assets/use-image-asset", () => ({
-  useImageAsset: (request: { readonly side?: "old" | "new" } | null) => {
+vi.mock("@/hooks/assets/use-file-asset", () => ({
+  useFileAsset: (request: { readonly side?: "old" | "new" } | null) => {
     const asset = request?.side === "old" ? state.oldAsset : state.newAsset;
     if (asset === null) throw new Error("missing image asset state");
     return asset;
@@ -363,7 +363,7 @@ class ControllableResizeObserver implements ResizeObserver {
 import { ImageDiffView, type ImageDiffViewProps } from "../image-diff-view";
 import { ImagePreview } from "../image-preview";
 
-const META: ImageAssetMeta = {
+const META: FileAssetMeta = {
   mediaType: "image/png",
   sizeBytes: 2048,
   width: 640,
@@ -384,7 +384,7 @@ const DIFF_PROPS: ImageDiffViewProps = {
   revisionKey: "revision-1",
 };
 
-function readyAsset(url: string): UseImageAssetResult {
+function readyAsset(url: string): UseFileAssetResult {
   return {
     status: "ready",
     url,
@@ -513,7 +513,7 @@ describe("image preview interactions", () => {
   });
 
   it("does not snap a huge image above its true fit after a wheel zoom-out and resize", () => {
-    const largeMeta: ImageAssetMeta = {
+    const largeMeta: FileAssetMeta = {
       ...META,
       width: 4_000,
       height: 3_000,
@@ -607,7 +607,7 @@ describe("image preview interactions", () => {
 
   it("refreshes fit state and bounds after a ready-header-ready asset change", () => {
     const firstMeta = META;
-    const secondMeta: ImageAssetMeta = {
+    const secondMeta: FileAssetMeta = {
       ...META,
       width: 4_000,
       height: 2_000,
@@ -823,7 +823,7 @@ describe("linked image diff transforms", () => {
   });
 
   it("disables shared Zoom out immediately for an uncached huge diff image", () => {
-    const largeMeta: ImageAssetMeta = {
+    const largeMeta: FileAssetMeta = {
       ...META,
       width: 4_000,
       height: 3_000,
@@ -839,7 +839,7 @@ describe("linked image diff transforms", () => {
   });
 
   it("clamps a mirrored mismatched gesture to the peer scale before its position bounds", () => {
-    const largeMeta: ImageAssetMeta = {
+    const largeMeta: FileAssetMeta = {
       ...META,
       width: 4_000,
       height: 3_000,

@@ -16,13 +16,11 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
  *
  * ## How to keep this honest
  *
- * An entry describes what the client CONSTRUCTS, not which classes exist in
- * the package. `EpicV2StreamClient` is written and tested; it is not wired
- * into any production factory, so it is not served. Deleting an entry is how
- * a major becomes advertised, so the change that wires an implementation up
- * is the same change that removes its restriction - there is no separate flag
- * to remember, and no way to ship the client half while still declaring it
- * absent.
+ * An entry describes what the client CONSTRUCTS, not which majors the registry
+ * installs. Deleting an entry is how a major becomes advertised, so the change
+ * that wires an implementation up is the same change that removes its
+ * restriction - there is no separate flag to remember, and no way to ship the
+ * client half while still declaring it absent.
  *
  * A method omitted here advertises every installed major, which is the right
  * default: the overwhelmingly common case is one client implementation
@@ -30,20 +28,23 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
  */
 export const CLIENT_SERVED_STREAM_MAJORS: ServedMajorsByMethod = {
   /**
-   * `@1` only. `epic-session-provider.tsx` constructs `EpicStreamClient`
-   * unconditionally, and that client speaks the `@1` frame set - root Y.Doc
-   * updates plus artifact-room fan-out.
+   * `@1` only, PERMANENTLY - this entry no longer holds anything back.
    *
-   * `@2` (typed metadata frames plus explicit per-artifact body attaches) has
-   * a host resolver and an `EpicV2StreamClient`, but nothing in the renderer
-   * constructs it: consuming `@2` means the store projects from typed rows
-   * rather than from a doc replica, which is the GUI store rework. Until that
-   * lands, a client that advertised `@2` would negotiate it and then receive
-   * an `epicStateSnapshot` it drops on the floor, so an epic would never
-   * seed.
+   * It began as a temporary hold on an unimplemented client half: `@2` was
+   * installed in the registry, host-served, and had a client wrapper that
+   * nothing in the renderer constructed, so advertising it would have
+   * negotiated a frame set the GUI dropped on the floor. `@2` has since been
+   * RETIRED unreleased - its schemas, its host resolver and its client wrapper
+   * are all deleted, and its planes were inherited by `epic.state.subscribe`,
+   * `epic.status.subscribe` and `artifact.subscribe`, which are separate
+   * METHODS on their own `@1` lines rather than a major of this one.
    *
-   * Remove this entry in the change that wires `EpicV2StreamClient` into the
-   * session factory - not before, and not separately.
+   * So with one installed major left this pin has nothing to remove: it is the
+   * ordinary shape of a method whose whole line the client serves. Keep it
+   * anyway, because the alternative is an omitted method that would silently
+   * advertise whatever major a future reader installs here - and this method's
+   * frozen `@1.0`-`@1.3` line is exactly the one the host keeps serving
+   * indefinitely for GUIs that have not updated.
    */
   "epic.subscribe": [1],
   // `satisfies` pins every key to a REGISTRY stream method name: a registry

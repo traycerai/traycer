@@ -34,7 +34,7 @@ function register(): void {
     content: CONTENT,
     settings: SETTINGS,
     worktreeIntent: null,
-    placement: { kind: "active-tile" },
+    placement: null,
     messageId: "msg-1",
     clientActionId: "cai-1",
     createdAt: 1,
@@ -97,7 +97,7 @@ describe("v1 -> v2 persisted-key migration", () => {
     content: CONTENT,
     settings: SETTINGS,
     worktreeIntent: null,
-    placement: { kind: "active-tile" },
+    placement: null,
     clientActionId: "cai-1",
     messageId: "msg-1",
     failureReason: null,
@@ -120,6 +120,41 @@ describe("v1 -> v2 persisted-key migration", () => {
     expect(record.chatId).toBe(CHAT_ID);
     expect(record.hostId).toBe("host-1");
     expect(record.status).toBe("waitingChat");
+  });
+
+  it("drops a retired placement shape instead of handing it to the resolver", () => {
+    const migrated = migrateInitialChatHandoffState({
+      handoffs: {
+        [V1_KEY]: {
+          ...V1_RECORD,
+          // The pre-refactor `ConversationTilePlacement` - no pane id, and a
+          // `kind` the explicit-placement resolver does not know.
+          placement: { kind: "target-group" },
+        },
+      },
+    });
+
+    const record = migrated.handoffs[initialChatHandoffKey(SCOPE)];
+    expect(record.placement).toBeNull();
+    // The message itself still rides through - only the placement is dropped.
+    expect(record.chatId).toBe(CHAT_ID);
+  });
+
+  it("keeps an explicit placement that is already in the current shape", () => {
+    const migrated = migrateInitialChatHandoffState({
+      handoffs: {
+        [V1_KEY]: {
+          ...V1_RECORD,
+          placement: { kind: "tab", paneId: "pane-1", index: null },
+        },
+      },
+    });
+
+    expect(migrated.handoffs[initialChatHandoffKey(SCOPE)].placement).toEqual({
+      kind: "tab",
+      paneId: "pane-1",
+      index: null,
+    });
   });
 
   it("drops a record whose status is outside the union rather than stranding it", () => {

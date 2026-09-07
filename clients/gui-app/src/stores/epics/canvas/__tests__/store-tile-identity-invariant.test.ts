@@ -390,7 +390,10 @@ describe("canvas tile identity invariant: internal mutation ingress", () => {
     expect(() =>
       useEpicCanvasStore
         .getState()
-        .openTileInPane(otherTabId, otherPaneId, collidingInput),
+        .openTileInPane(otherTabId, otherPaneId, collidingInput, {
+          mode: "permanent",
+          index: null,
+        }),
     ).not.toThrow();
 
     expect(requireCanvas(tabId).tilesByInstanceId[SPEC_A.instanceId]).toEqual(

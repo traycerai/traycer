@@ -186,9 +186,14 @@ describe("scrubSupportText", () => {
       );
     });
 
-    it("redacts a quoted-key authorization Basic-auth value (finding #3)", () => {
+    // The shared leaf's quoted-JSON Authorization pattern keeps the scheme and
+    // redacts the credential after it, which is strictly more than the old
+    // whole-value redaction did: this 12-character payload is below the bare
+    // `Basic <base64>` pattern's 16-character floor, so before the leaf it
+    // only ever redacted because the value happened to be quoted.
+    it("redacts a quoted-key authorization Basic-auth value, keeping the scheme", () => {
       expect(scrubSupportText('{"authorization":"Basic dXNlcjpwYXNz"}')).toBe(
-        '{"authorization":<redacted>}',
+        '{"authorization":"Basic <redacted>"}',
       );
     });
 
@@ -416,5 +421,58 @@ describe("deepScrubSupportValue", () => {
         },
       },
     });
+  });
+});
+
+/**
+ * Root cause H: `SENSITIVE_INLINE_VALUE_PATTERN` keys on the word "cookie"
+ * itself, so a log line or a `browser-trace.jsonl` record naming
+ * `csrftoken=...` / `sessionid=...` carried a live session and read as
+ * ordinary text. Replaying one is a full account takeover.
+ */
+describe("scrubSupportText session cookies", () => {
+  it("redacts csrftoken and sessionid in a cookie string", () => {
+    expect(
+      scrubSupportText("csrftoken=AbC123xyz; sessionid=9f8e7d6c5b4a"),
+    ).toBe("csrftoken=<redacted>; sessionid=<redacted>");
+  });
+
+  it("redacts the fixed framework session cookie names", () => {
+    expect(scrubSupportText("PHPSESSID=abc123def")).toBe(
+      "PHPSESSID=<redacted>",
+    );
+    expect(scrubSupportText("JSESSIONID=0000AbCd")).toBe(
+      "JSESSIONID=<redacted>",
+    );
+    expect(scrubSupportText("connect.sid=s%3Aabc.def")).toBe(
+      "connect.sid=<redacted>",
+    );
+  });
+
+  it("redacts an application's own `<app>_session` cookie", () => {
+    expect(scrubSupportText("_acme_session=QWxhZGRpbjpvcGVu")).toBe(
+      "_acme_session=<redacted>",
+    );
+  });
+
+  it("leaves diagnostic fields whose names merely contain the word alone", () => {
+    // A wildcard would eat these, and a scrubber that corrupts a bug report
+    // is a scrubber people work around.
+    const input = "sessionCount=3 sessionAnchor=top sessionsOpen=1";
+    expect(scrubSupportText(input)).toBe(input);
+  });
+
+  it("redacts the JSON-serialized cookie form too", () => {
+    // A trace record or a structured log line renders a cookie as JSON, and a
+    // closing key-quote sits between the name and the `:` - which the bare
+    // `name=value` pattern's `\s*[:=]` does not skip past.
+    // The value's own quotes go with it, exactly as the quoted inline-value
+    // pattern already does for `"password": "..."`.
+    expect(scrubSupportText('{"sessionid": "abc123def456"}')).toBe(
+      '{"sessionid": <redacted>}',
+    );
+    expect(scrubSupportText("csrftoken: 'AbC123xyz'")).toBe(
+      "csrftoken: <redacted>",
+    );
   });
 });

@@ -25,7 +25,10 @@ import type {
   TokenRotateResult,
   TokenStoreChange,
 } from "../ipc-contracts/auth-types";
-import type { DesktopAuthSessionSnapshot } from "../ipc-contracts/window-types";
+import type {
+  DesktopAuthSessionSetResult,
+  DesktopAuthSessionSnapshot,
+} from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
 /**
@@ -248,7 +251,13 @@ export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
 
 export interface AuthSessionBridgeSurface {
   get(): Promise<DesktopAuthSessionSnapshot>;
-  set(snapshot: DesktopAuthSessionSnapshot): Promise<void>;
+  /**
+   * Main verifies the bearer before adopting it, so a set can be REFUSED -
+   * the renderer is told why rather than silently believing it landed.
+   */
+  set(
+    snapshot: DesktopAuthSessionSnapshot,
+  ): Promise<DesktopAuthSessionSetResult>;
   onChange(handler: Listener<DesktopAuthSessionSnapshot>): Disposable;
 }
 
@@ -262,7 +271,7 @@ export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.authSessionSet,
         snapshot,
-      ) as Promise<void>,
+      ) as Promise<DesktopAuthSessionSetResult>,
     onChange: (handler) =>
       subscribe<DesktopAuthSessionSnapshot>(
         RunnerHostEvent.authSessionChange,

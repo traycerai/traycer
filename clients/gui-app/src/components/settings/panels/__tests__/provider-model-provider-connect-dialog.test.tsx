@@ -42,7 +42,7 @@ const mocks = vi.hoisted(() => ({
   authCalls: [] as AuthCall[],
   awaitCalls: [] as AuthCall[],
   cancelCalls: [] as CancelCall[],
-  openExternalLink: vi.fn(),
+  openLink: vi.fn(),
   authIsPending: false,
 }));
 
@@ -99,8 +99,8 @@ vi.mock(
   }),
 );
 
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({ mutate: mocks.openExternalLink }),
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => mocks.openLink,
 }));
 
 // Radix's Select needs a pointer-capable layout to open its listbox, which
@@ -226,7 +226,7 @@ beforeEach(() => {
   mocks.awaitCalls.length = 0;
   mocks.cancelCalls.length = 0;
   mocks.authIsPending = false;
-  mocks.openExternalLink.mockReset();
+  mocks.openLink.mockReset();
   useModelProviderPendingAuthStore.setState({ entries: {} });
 });
 
@@ -641,8 +641,10 @@ describe("OAuth code flow", () => {
       method: "code",
       instructions: "Enter code ABCD-1234",
     });
-    expect(mocks.openExternalLink).toHaveBeenCalledWith(
+    expect(mocks.openLink).toHaveBeenCalledWith(
       "https://example.test/device",
+      "auth",
+      null,
     );
     expect(screen.getByText("Enter code ABCD-1234")).toBeTruthy();
 
@@ -864,7 +866,7 @@ describe("OAuth auto flow", () => {
       instructions: null,
     };
     settle(start, pendingArm);
-    expect(mocks.openExternalLink).toHaveBeenCalledTimes(1);
+    expect(mocks.openLink).toHaveBeenCalledTimes(1);
     expect(
       screen.getByText("Waiting for the browser to finish signing in"),
     ).toBeTruthy();
@@ -901,7 +903,7 @@ describe("OAuth auto flow", () => {
 
     // ONE open for the whole flow: the start. Every tick after it refreshed
     // the panel and nothing else.
-    expect(mocks.openExternalLink).toHaveBeenCalledTimes(1);
+    expect(mocks.openLink).toHaveBeenCalledTimes(1);
     expect(onDone).toHaveBeenCalledTimes(1);
     expect(useModelProviderPendingAuthStore.getState().entries).toEqual({});
 

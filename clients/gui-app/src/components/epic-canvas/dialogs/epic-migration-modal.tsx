@@ -115,7 +115,6 @@ export function EpicMigrationModal(props: EpicMigrationModalProps): ReactNode {
         />
         <DialogPrimitive.Content
           data-slot="dialog-content"
-          data-browser-overlay="migration-dialog"
           data-testid="epic-migration-modal"
           aria-describedby={undefined}
           onEscapeKeyDown={(event) => {

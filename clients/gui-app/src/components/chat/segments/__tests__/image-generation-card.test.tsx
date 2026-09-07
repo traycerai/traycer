@@ -32,10 +32,6 @@ vi.mock(
   }),
 );
 
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({ isPending: false, mutate: vi.fn() }),
-}));
-
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: () => null,
   useOpenEpicId: () => "epic-1",
@@ -363,6 +359,7 @@ describe("<ToolSegment /> image_generation promotion routing", () => {
         <ToolSegment
           headerFindUnitId={null}
           managedCommand={null}
+          agentMessageReceipt={null}
           id="tool-img-route"
           toolName="image_generation"
           inputSummary={deriveToolInputSummary("image_generation", {
@@ -397,6 +394,7 @@ describe("<ToolSegment /> image_generation promotion routing", () => {
         <ToolSegment
           headerFindUnitId={null}
           managedCommand={null}
+          agentMessageReceipt={null}
           id="tool-other"
           toolName="read_file"
           inputSummary={deriveToolInputSummary("read_file", {

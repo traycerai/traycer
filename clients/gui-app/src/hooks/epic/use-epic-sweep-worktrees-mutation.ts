@@ -11,6 +11,8 @@ import { invalidateWorktreeListingAndBindingCaches } from "@/hooks/worktree/inva
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import {
   runWorktreeCleanup,
+  worktreeCleanupFailureDetail,
+  type WorktreeCleanupFailure,
   type WorktreeCleanupOutcome,
 } from "@/lib/epics/run-worktree-cleanup";
 import { reportableWarningToast } from "@/lib/reportable-error-toast";
@@ -37,11 +39,6 @@ export interface SweepTargetWorktree {
   readonly repoIdentifier: RemovedBranchRepo | null;
   /** In-use rows the user selected deliberately: deleteByPath with stopOwners. */
   readonly stopOwners: boolean;
-  /**
-   * Reviewed `holdersRevision` for a 1.2 compare-and-refuse. `undefined`
-   * on an old host (no digest) — stopOwners still runs.
-   */
-  readonly expectedHoldersRevision: string | undefined;
 }
 
 export interface SweepWorktreesVariables {
@@ -54,9 +51,8 @@ export interface SweepWorktreesVariables {
 
 export interface SweepWorktreesResult {
   readonly removed: ReadonlyArray<string>;
-  readonly failed: ReadonlyArray<string>;
+  readonly failed: ReadonlyArray<WorktreeCleanupFailure>;
   readonly uncertain: ReadonlyArray<string>;
-  readonly holdersChanged: WorktreeCleanupOutcome["holdersChanged"];
   readonly hostId: string;
 }
 
@@ -97,25 +93,12 @@ export function useEpicSweepWorktrees(): UseMutationResult<
           target.stopOwners ? [target.worktreePath] : [],
         ),
       );
-      const expectedHoldersRevisionByPath = new Map<string, string>();
-      for (const target of variables.worktrees) {
-        if (
-          target.expectedHoldersRevision !== undefined &&
-          target.expectedHoldersRevision.length > 0
-        ) {
-          expectedHoldersRevisionByPath.set(
-            target.worktreePath,
-            target.expectedHoldersRevision,
-          );
-        }
-      }
       const outcome = await runWorktreeCleanup(openStreamTransport, {
         hostId: variables.hostId,
         paths: variables.worktrees.map((target) => target.worktreePath),
         source: "task_sweep",
         epicId: variables.epicId,
         stopOwnersPaths,
-        expectedHoldersRevisionByPath,
       });
       return { ...outcome, hostId: variables.hostId };
     },
@@ -124,8 +107,8 @@ export function useEpicSweepWorktrees(): UseMutationResult<
         result.removed.length > 0 ||
         result.failed.length > 0 ||
         result.uncertain.length > 0;
+      emitSweepSummaryToast(result);
       if (settled) {
-        emitSweepSummaryToast(result);
         purgeIntentsForRemovedWorktrees(
           result.hostId,
           variables.worktrees,
@@ -133,8 +116,6 @@ export function useEpicSweepWorktrees(): UseMutationResult<
         );
         invalidateWorktreeListingAndBindingCaches(queryClient, result.hostId);
       }
-      if (result.holdersChanged.length > 0) return;
-      if (!settled) emitSweepSummaryToast(result);
     },
     onError: (error) => {
       toast.error(error.message);
@@ -236,6 +217,12 @@ function isSweepTargetWorktree(value: unknown): value is SweepTargetWorktree {
 export interface SweepWorktreeSummary {
   readonly level: "success" | "warning";
   readonly message: string;
+  /**
+   * Per-path failure reasons for the toast's on-screen description, or `null`
+   * when the count line in `message` is all there is to say. Never goes into
+   * the report-issue context - it names absolute paths.
+   */
+  readonly detail: string | null;
 }
 
 export function sweepWorktreeSummary(
@@ -264,6 +251,7 @@ export function sweepWorktreeSummary(
   return {
     level: failed === 0 && uncertain === 0 ? "success" : "warning",
     message: parts.join(", "),
+    detail: worktreeCleanupFailureDetail(outcome.failed),
   };
 }
 
@@ -274,10 +262,17 @@ function emitSweepSummaryToast(outcome: WorktreeCleanupOutcome): void {
     toast.success(summary.message);
     return;
   }
-  reportableWarningToast(summary.message, undefined, {
-    title: "Sweep incomplete",
-    message: null,
-    code: null,
-    source: "Worktree sweep",
-  });
+  reportableWarningToast(
+    summary.message,
+    // The reason the host gave, on screen at the moment of the action. The
+    // report context below stays fixed product copy: a report is public and
+    // these reasons name absolute paths.
+    summary.detail === null ? undefined : { description: summary.detail },
+    {
+      title: "Sweep incomplete",
+      message: null,
+      code: null,
+      source: "Worktree sweep",
+    },
+  );
 }

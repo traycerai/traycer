@@ -658,6 +658,7 @@ function facadeInternalVerifierViolations(
   const facadeBindings = new Set<string>();
   const trustedTypeBindings = new Set<string>();
   const trustedStopIntentBindings = new Set<string>();
+  const trustedCliInvocationBindings = new Set<string>();
   const localDeclarationNames = new Set<string>();
   const rawCommands = new Set([
     "launchctl",
@@ -1206,6 +1207,21 @@ function facadeInternalVerifierViolations(
         }
       }
       if (
+        modulePath === "./cli-invocation-record" &&
+        ts.isNamedImports(bindings)
+      ) {
+        for (const element of bindings.elements) {
+          const imported =
+            element.propertyName?.getText(file) ?? element.name.text;
+          if (
+            imported === "runServiceRegistrationWithInvocationRecord" ||
+            imported === "runServiceUninstallWithInvocationRecord" ||
+            imported === "runServiceRemovalWithInvocationRecord"
+          )
+            trustedCliInvocationBindings.add(element.name.text);
+        }
+      }
+      if (
         (modulePath === "./aside-dirs" ||
           modulePath.endsWith("/installer/aside-dirs")) &&
         ts.isNamedImports(bindings)
@@ -1634,6 +1650,58 @@ function facadeInternalVerifierViolations(
       trustedRetireCalls.has("clearStopIntent")
     );
   };
+  const hasCliInvocationShape = (call: ts.CallExpression): boolean => {
+    if (!ts.isPropertyAccessExpression(call.expression)) return false;
+    const method = call.expression.name.text;
+    // `retireCompetingRegistration` removes THIS label's registration (wholly
+    // or in part) and so runs inside the same record transaction as an
+    // uninstall, through the generic removal runner's `remove` seam.
+    const expectedProperty =
+      method === "install"
+        ? "register"
+        : method === "uninstall"
+          ? "uninstall"
+          : method === "retireCompetingRegistration"
+            ? "remove"
+            : undefined;
+    const expectedHelper =
+      method === "install"
+        ? "runServiceRegistrationWithInvocationRecord"
+        : method === "uninstall"
+          ? "runServiceUninstallWithInvocationRecord"
+          : method === "retireCompetingRegistration"
+            ? "runServiceRemovalWithInvocationRecord"
+            : undefined;
+    if (expectedProperty === undefined || expectedHelper === undefined)
+      return false;
+    if (!trustedCliInvocationBindings.has(expectedHelper)) return false;
+    let current: ts.Node | undefined = call.parent;
+    let routedProperty: ts.PropertyAssignment | undefined;
+    while (current !== undefined) {
+      if (
+        routedProperty === undefined &&
+        ts.isPropertyAssignment(current) &&
+        ts.isIdentifier(current.name) &&
+        current.name.text === expectedProperty
+      )
+        routedProperty = current;
+      if (
+        routedProperty !== undefined &&
+        ts.isCallExpression(current) &&
+        ts.isIdentifier(current.expression) &&
+        current.expression.text === expectedHelper &&
+        trustedCliInvocationBindings.has(current.expression.text)
+      ) {
+        const objectLiteral = routedProperty.parent;
+        return (
+          ts.isObjectLiteralExpression(objectLiteral) &&
+          current.arguments.includes(objectLiteral)
+        );
+      }
+      current = current.parent;
+    }
+    return false;
+  };
   const legacyCoreDeclarationsPresent = [
     "uninstallHostServiceLegacy",
     "stopHostServiceLegacy",
@@ -1776,12 +1844,36 @@ function facadeInternalVerifierViolations(
         }
         return false;
       })();
+      const legacyCliInvocationWrapper = (() => {
+        if (relativePath !== "src/service/index.ts") return false;
+        if (
+          !trustedCliInvocationBindings.has(
+            "runServiceRegistrationWithInvocationRecord",
+          ) ||
+          !trustedCliInvocationBindings.has(
+            "runServiceUninstallWithInvocationRecord",
+          )
+        )
+          return false;
+        let current: ts.Node | undefined = actuator.node.parent;
+        while (current !== undefined) {
+          if (
+            ts.isFunctionDeclaration(current) &&
+            current.name?.text === "withCliInvocationRecord" &&
+            hasCliInvocationShape(actuator.node)
+          )
+            return true;
+          current = current.parent;
+        }
+        return false;
+      })();
       return !(
         verifier ||
         (actuator.registration && callbackHasLiveVerifier(actuator.node)) ||
         (actuator.registration && authorityWrapped(actuator.node)) ||
         legacyCoreOwner ||
         legacyStopIntentWrapper ||
+        legacyCliInvocationWrapper ||
         legacyCoreFacade
       );
     })
@@ -2167,6 +2259,34 @@ describe("host update contender architecture boundary", () => {
         "unverified-facade",
         "src/host/update-mutation.ts",
       ],
+      [
+        "function withCliInvocationRecord(controller) { return { ...controller, install: (options) => runServiceRegistrationWithInvocationRecord({ register: () => controller.install(options) }), uninstall: (options) => runServiceUninstallWithInvocationRecord({ uninstall: () => controller.uninstall(options) }) }; }",
+        "unverified-controller",
+        "src/service/index.ts",
+      ],
+      [
+        'import { runServiceRegistrationWithInvocationRecord, runServiceUninstallWithInvocationRecord } from "./cli-invocation-record"; function withSomethingElse(controller) { return { ...controller, install: (options) => runServiceRegistrationWithInvocationRecord({ register: () => controller.install(options) }), uninstall: (options) => runServiceUninstallWithInvocationRecord({ uninstall: () => controller.uninstall(options) }) }; }',
+        "unverified-controller",
+        "src/service/index.ts",
+      ],
+      [
+        'import { runServiceRegistrationWithInvocationRecord, runServiceUninstallWithInvocationRecord } from "./cli-invocation-record"; function withCliInvocationRecord(controller) { return { ...controller, install: (options) => controller.install(options), uninstall: (options) => controller.uninstall(options) }; }',
+        "unverified-controller",
+        "src/service/index.ts",
+      ],
+      // The competing-registration repair removes this label's registration,
+      // so an explicit forward that skips the removal runner is as unverified
+      // as a bare `uninstall` forward.
+      [
+        'import { runServiceRegistrationWithInvocationRecord, runServiceUninstallWithInvocationRecord, runServiceRemovalWithInvocationRecord } from "./cli-invocation-record"; function withCliInvocationRecord(controller) { return { ...controller, install: (options) => runServiceRegistrationWithInvocationRecord({ register: () => controller.install(options) }), uninstall: (options) => runServiceUninstallWithInvocationRecord({ uninstall: () => controller.uninstall(options) }), retireCompetingRegistration: (label) => controller.retireCompetingRegistration(label) }; }',
+        "unverified-controller",
+        "src/service/index.ts",
+      ],
+      [
+        'import { runServiceRegistrationWithInvocationRecord, runServiceUninstallWithInvocationRecord, runServiceRemovalWithInvocationRecord } from "./cli-invocation-record"; function withCliInvocationRecord(controller) { return { ...controller, install: (options) => runServiceRegistrationWithInvocationRecord({ register: () => controller.install(options) }), uninstall: (options) => runServiceUninstallWithInvocationRecord({ uninstall: () => controller.uninstall(options) }), retireCompetingRegistration: (label) => runServiceRemovalWithInvocationRecord({ remove: () => controller.uninstall(label), removed: () => true }) }; }',
+        "unverified-controller",
+        "src/service/index.ts",
+      ],
     ] as const;
     for (const [
       fixture,
@@ -2178,6 +2298,15 @@ describe("host update contender architecture boundary", () => {
         `relative legacy lookalike must report ${diagnostic}: ${fixture}`,
       ).toEqual(expect.arrayContaining([expect.stringContaining(diagnostic)]));
     }
+    const trustedCliInvocationFixture =
+      'import { runServiceRegistrationWithInvocationRecord, runServiceUninstallWithInvocationRecord, runServiceRemovalWithInvocationRecord } from "./cli-invocation-record"; function withCliInvocationRecord(controller) { return { ...controller, install: (options) => runServiceRegistrationWithInvocationRecord({ register: () => controller.install(options) }), uninstall: (options) => runServiceUninstallWithInvocationRecord({ uninstall: () => controller.uninstall(options) }), retireCompetingRegistration: (label) => runServiceRemovalWithInvocationRecord({ remove: () => controller.retireCompetingRegistration(label), removed: (result) => result.kind === "retired" }) }; }';
+    expect(
+      facadeInternalVerifierViolations(
+        trustedCliInvocationFixture,
+        true,
+        "src/service/index.ts",
+      ),
+    ).toEqual([]);
   });
 
   it("detects a forbidden actuator in a recursive negative fixture", async () => {

@@ -77,7 +77,7 @@ export class BrowserViewAnnotationHost {
     this.end(entry, "replaced");
     const surface = requireSurface(entry);
     const session = new BrowserAnnotationSession({
-      webContents: entry.view.webContents,
+      webContents: entry.webContents,
       debugSession: this.debugSessions.ensure(entry),
       theme: input.theme,
       identity: {
