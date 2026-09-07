@@ -21,15 +21,13 @@ const BASE_REASONS = [
   "record-fail-closed",
   "refused-attempt-gone",
   // P1 window B's third answer at the binding site: present, named, and MOVED.
-  // Added here rather than on the branch that mints it because this helper did
-  // not exist there - the two lived on disjoint branches and only meet in this
-  // assembly, which is exactly the kind of gap a vocabulary table is for.
   //
-  // 21 characters, so the suffixed form is 42 and still inside the wire
-  // pattern's 64 - which matters more for this base than for its neighbours:
-  // it is one of only two that can actually ARRIVE suffixed (see below), so a
-  // base long enough to overflow would silently drop the suffix on a live
-  // path rather than a hypothetical one.
+  // 21 characters, so the suffixed form is 42 and stays inside the wire
+  // pattern's 64. That is the whole claim this entry makes, and the docblock
+  // is why: this list checks the GENERATOR'S BUDGET, not the vocabulary, so a
+  // new base needs no change here to be handled correctly. A note about which
+  // bases a producer can actually EMIT suffixed would be authority the list
+  // disclaims - however true it happened to be on the day it was written.
   "refused-attempt-moved",
   "refused-unverifiable",
   "recovered-complete",
