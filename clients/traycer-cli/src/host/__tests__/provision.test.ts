@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   createServiceInstallLifecycleMock: vi.fn(),
   assertHostNotBusyMock: vi.fn(),
   isVersionYankedMock: vi.fn(),
+  resolveServiceCliInvocationMock: vi.fn(),
   lockHeld: false,
   lockAcquisitions: 0,
 }));
@@ -82,8 +83,13 @@ vi.mock("../../service", () => ({
   serviceLabelFor: mocks.serviceLabelForMock,
 }));
 
+// Reviewer C, measuring the Q7 patch: this factory used to be a bare `vi.fn()`
+// with no return value, because no row in this suite had ever reached the
+// service-register branch - every shape here either no-ops or installs. The
+// `registerService: true` row below is the first, and an unresolved invocation
+// throws inside `runServiceRegister` for reasons unrelated to what it pins.
 vi.mock("../../service/cli-binary", () => ({
-  resolveServiceCliInvocation: vi.fn(),
+  resolveServiceCliInvocation: mocks.resolveServiceCliInvocationMock,
 }));
 
 vi.mock("../../service/install-lifecycle", () => ({
@@ -140,6 +146,7 @@ const {
   createServiceInstallLifecycleMock,
   assertHostNotBusyMock,
   isVersionYankedMock,
+  resolveServiceCliInvocationMock,
 } = mocks;
 
 import { provisionHost, type ProvisionHostOptions } from "../provision";
@@ -506,6 +513,10 @@ describe("provisionHost - Q7: own-build-minimum satisfaction", () => {
     assertHostNotBusyMock.mockResolvedValue(undefined);
     discardStagedHostInstallSourceMock.mockResolvedValue(undefined);
     createServiceInstallLifecycleMock.mockReturnValue(sampleLifecycleHandle());
+    resolveServiceCliInvocationMock.mockResolvedValue({
+      command: "/usr/local/bin/traycer",
+      args: [],
+    });
     stageHostInstallSourceMock.mockResolvedValue(sampleStaged("1.7.2"));
     commitHostInstallSourceMock.mockResolvedValue({
       record: sampleRecord("1.7.2"),
@@ -529,6 +540,21 @@ describe("provisionHost - Q7: own-build-minimum satisfaction", () => {
       install: vi.fn(),
       start: vi.fn(),
       hostStartAdoptionLabel: vi.fn(async (label: { id: string }) => label.id),
+    };
+  }
+
+  // The shape the desktop's own convergence actually meets: bytes on disk, no
+  // OS service registration, nothing listening. Every other row in this suite
+  // runs against `runningController()`.
+  function downController() {
+    return {
+      ...runningController(),
+      status: async () => ({
+        state: "not-installed" as const,
+        version: null,
+        listenUrl: null,
+        pid: null,
+      }),
     };
   }
 
@@ -693,6 +719,109 @@ describe("provisionHost - Q7: own-build-minimum satisfaction", () => {
       "Host provisioning replacing a different installed version",
       expect.anything(),
     );
+  });
+
+  // Reviewer C, P2a: the row above freezes `sourceKind` to `"registry"`,
+  // because that is what the shared staged fixture carries - so the pins could
+  // not tell a bundled replacement from a registry one, and `local-file` is
+  // the source kind that motivated Q7 in the first place. The field exists to
+  // answer "was it the app's own build that replaced my host?", and until this
+  // row it never had to.
+  it("names `local-file` as the source kind when it is the OWN BUILD doing the replacing", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.8.0"));
+    isVersionYankedMock.mockResolvedValue(false);
+    stageHostInstallSourceMock.mockResolvedValue({
+      ...sampleStaged("1.7.2"),
+      source: { kind: "local-file", value: "/bundle/host.tar.gz" },
+    });
+    const info = vi.fn();
+
+    await provisionHost(
+      makeOpts({
+        // `--force`, because a newer install is exactly what this policy now
+        // declines to replace on its own - forcing is the only way an own
+        // build reaches the swap over one, and it is the case an operator
+        // most needs named in the log.
+        satisfaction: ownBuild("1.7.2"),
+        recordVersionOverride: "1.7.2",
+        force: true,
+        runtime: { ...makeRuntime(), logger: { ...noopLogger, info } },
+      }),
+    );
+
+    expect(info).toHaveBeenCalledWith(
+      "Host provisioning replacing a different installed version",
+      {
+        environment: "production",
+        installedVersion: "1.8.0",
+        targetVersion: "1.7.2",
+        sourceKind: "local-file",
+      },
+    );
+  });
+
+  // Reviewer C, P2b: every other row here runs against a RUNNING host, and the
+  // state the desktop actually leans on is the opposite one - its ensure is
+  // bytes-only (`registerService: false`), so the host is routinely down when
+  // the convergence runs, and starting it is the desktop's own job afterwards.
+  // If the newer install were only kept while the host happened to be up, Q7
+  // would be unfixed for exactly the case it was reported from.
+  it("keeps a newer install when the host is NOT running and registration is host-owned", async () => {
+    createServiceControllerMock.mockReturnValue(downController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.8.0"));
+    isVersionYankedMock.mockResolvedValue(false);
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: ownBuild("1.7.2"),
+        recordVersionOverride: "1.7.2",
+        registerService: false,
+      }),
+    );
+
+    // Two independent guards hold this, and a single-conjunct mutation of
+    // either one leaves the row green: `isSatisfied` asks only for `installed`
+    // once registration is host-owned, and the locked path's second no-op
+    // guard (`installed && versionSatisfied && !registerService`) does not
+    // consult the service state at all. What both of them route through is
+    // the VERSION predicate, which is why the mutation that reddens this row
+    // is a `state.running` conjunct added to `own-build-minimum` - the exact
+    // regression the row exists to forbid.
+    expect(result.action).toBe("noop");
+    expect(result.running).toBe(false);
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+    // The version handed back is the host the user actually has, not the
+    // bundle that declined to replace it - what the desktop reads after a
+    // kept convergence.
+    expect(result.version).toBe("1.8.0");
+  });
+
+  // Reviewer C, measured: the Windows path (`convergeReadyCliOwned`) sends no
+  // `--no-service-register`, so the row above's second no-op guard - the one
+  // gated on `!registerService` - does not exist there. A newer, unregistered
+  // host fails `isSatisfied` outright and falls through to the branch chain,
+  // and the ONLY thing standing between it and a downgrade swap is the third
+  // conjunct of the install gate (`!reinstallVersionSatisfied`). Q7 protects
+  // Windows through a single predicate, so it is pinned here rather than left
+  // to the Mac row's coincidence.
+  it("registers instead of replacing when a newer install is unregistered and the CLI owns the service", async () => {
+    createServiceControllerMock.mockReturnValue(downController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.8.0"));
+    isVersionYankedMock.mockResolvedValue(false);
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: ownBuild("1.7.2"),
+        recordVersionOverride: "1.7.2",
+        registerService: true,
+      }),
+    );
+
+    expect(result.action).toBe("service-registered");
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
   });
 
   it("still replaces a newer install under `--force` - the operator's own escape hatch is unchanged", async () => {

@@ -56,8 +56,8 @@ import { assertHostNotBusy } from "./busy-check";
 //
 // Source resolution and idempotency policy differ per caller, so both are
 // injected: `resolveInstallSource` is only invoked on the install branch,
-// and `satisfaction` (presence / exact / implicit-registry-minimum, finding
-// D) controls the fast no-op.
+// and `satisfaction` (presence / exact / own-build-minimum /
+// implicit-registry-minimum, finding D + Q7) controls the fast no-op.
 
 export type HostProvisionAction =
   | "noop"
@@ -145,14 +145,20 @@ export interface ProvisionHostOptions {
   readonly resolveInstallSource: () => Promise<InstallSourceArg>;
   // The idempotency predicate. `exact`/`presence` behave like the old
   // `targetVersion` concrete/`null`; the bundled-host callers pass this
-  // build's `config.version` as `exact` so a rebuilt (same-channel) host is
-  // detected and replaced even without a semver bump. The registry default
-  // uses `implicit-registry-minimum` so a newer non-yanked install is kept.
+  // build's `config.version` as `own-build-minimum`, so a rebuilt
+  // (same-channel) host is still detected and replaced without a semver bump,
+  // while a comparably NEWER install is kept rather than reverted (Q7). The
+  // registry default uses `implicit-registry-minimum` so a newer non-yanked
+  // install is kept there too.
   readonly satisfaction: HostSatisfactionPolicy;
   // Recorded as the install version for a local-file install (the
-  // bundled-host callers pass `config.version` so the recorded version
-  // matches the exact satisfaction policy and the next launch is a no-op
+  // bundled-host callers pass `config.version` so the recorded version is the
+  // one their satisfaction policy asks for, and the next launch is a no-op
   // until the build changes). `null` keeps the installer's derived default.
+  //
+  // It is only ever WRITTEN on the install branch, which is why a kept newer
+  // install survives with its own record: nothing restamps a host this run
+  // decided not to replace.
   readonly recordVersionOverride: string | null;
   readonly enableLinger: boolean;
   readonly allowSelfInvocation: boolean;
@@ -994,13 +1000,26 @@ async function readProvisionState(
   };
 }
 
-// The installed-version predicate (RCA finding D). "latest"/`--from`/the
-// packaged archive carry synthetic local versions and use `presence`; an
-// explicit `--release` or the bundled build use `exact`; the registry
-// default uses `implicit-registry-minimum`, which accepts an installed
-// version NEWER than the target (an out-of-band host update must not be
-// downgraded) unless the manifest has explicitly yanked it - an absent
-// entry or a failed/expired lookup deliberately fails open.
+// The installed-version predicate (RCA finding D, narrowed by Q7). Four
+// policies, one per shape of request:
+//
+//   - `latest` carries no version to compare against, so it is `presence`;
+//   - an explicit `--release <semver>` is `exact` - a pin is a pin;
+//   - the build-stamped registry default is `implicit-registry-minimum`,
+//     which accepts an installed version NEWER than the target (an
+//     out-of-band host update must not be downgraded) unless the manifest has
+//     explicitly yanked it - an absent entry or a failed/expired lookup
+//     deliberately fails open;
+//   - this build's OWN archive - packaged, or the `--from` the Windows
+//     desktop passes for it - is `own-build-minimum`: `exact` in every
+//     direction except that same newer one.
+//
+// The sentence this replaces said `--from` and the packaged archive carried
+// synthetic local versions and used `presence`. They have not since
+// `ensureHost` took over from auto-bootstrap, which stamps `config.version`
+// on both and asked for `exact` against it - the very policy Q7 narrowed. It
+// was wrong before this change and is corrected with it rather than left
+// inherited: it heads the function whose branches it claims to describe.
 async function versionSatisfied(
   state: ProvisionState,
   satisfaction: HostSatisfactionPolicy,
