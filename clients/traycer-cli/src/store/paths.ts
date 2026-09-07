@@ -271,17 +271,42 @@ export function hostCredentialPath(
  *
  * ABSENCE IS A REAL VERDICT HERE, and that is now proven rather than assumed
  * (Q25, dc84fa8b's host-writer column at
- * `epics/9f080b75-0fa7-426c-a3ae-eba2c891662f/artifacts/host-rc2-update-rca/host-update-executor-cutover-plan/q25-cli-path-ownership/host-writer-column/index.md`).
+ * `epics/9f080b75-0fa7-426c-a3ae-eba2c891662f/artifacts/host-rc2-update-rca/host-update-executor-cutover-plan/q25-cli-path-ownership/host-writer-column/index.md`,
+ * read at internal `2f7b56435d`).
  * The host's AUTH plane is slot-scoped - it resolves this marker under its own
  * host home - and the string that host home is built from is the one THIS
  * MODULE computed: `commands/host-start.ts` spawns the host with
- * `--host-data-dir <hostHomeDir(environment)>` and the host takes it verbatim.
- * So the CLI is not guessing at the host's answer; it supplied it, and a
- * missing file under it means the host has not burned a credential.
+ * `--host-data-dir <hostHomeDir(environment)>`.
  *
- * Note WHY they agree, because it is not the reassuring reason. The host's own
- * `hostHomeDir` has no concept of a dev-run slot at all; the two functions
- * agree because of the flag, not because anyone keeps them in step. See
+ * NOT taken verbatim, and the difference is the premise of the verdict rather
+ * than a detail (cold review B). `main-bootstrap.ts`'s
+ * `applyHostDataDirOverride` receives that string, `resolve()`s it, and
+ * validates it before any `setHostHomeDirOverride`: it can throw
+ * (`aliasesCanonicalTree`) or - the branch that matters here - fail
+ * `lexicallyWithinHostRoot`, log to `console.error` and SILENTLY fall back to
+ * the baked env home. Take that branch and this row inverts with nothing red:
+ * the CLI probes a directory the host never wrote to, finds no marker, and
+ * reports a clean auth plane. Exactly the false-clean that
+ * {@link hostIdentityNeedsReauthPath} refuses to produce on the other plane.
+ *
+ * So the verdict rests on the guard being unreachable from here, not on the
+ * value surviving untouched, and it is unreachable for a reason worth stating
+ * as two constants. `HOST_HOME = join(TRAYCER_HOME, "host")` above is not
+ * env-configurable, and every arm of this module's `hostHomeDir` roots there -
+ * `dev-runs/<slot>` included. The host computes its `hostRoot` as
+ * `hostHomeDir("production")` over its own `traycerHomeDir()`. Both sides
+ * therefore root at the same constant, and a path this module produced cannot
+ * fail the host's lexical containment check.
+ *
+ * WHAT WOULD BREAK IT, named so the dependency is visible to whoever makes the
+ * change: giving `HOST_HOME` an environment override, or moving the host's
+ * root off `traycerHomeDir()`. Either makes the two roots independently
+ * configurable, at which point the silent-fallback branch becomes reachable
+ * and this row's absence stops being evidence of anything.
+ *
+ * Note also WHY the two agree at all, because it is not the reassuring reason.
+ * The host's own `hostHomeDir` has no concept of a dev-run slot; they agree
+ * because of the flag, not because anyone keeps them in step. See
  * {@link hostIdentityNeedsReauthPath} for the plane where that stops holding.
  */
 export function hostNeedsReauthPath(
@@ -309,7 +334,8 @@ export function hostNeedsReauthPath(
  * THE ASYMMETRY WITH {@link hostNeedsReauthPath} IS PROVEN, not cautious, and
  * the comment used to understate it as something the CLI "cannot verify". Read
  * at the host source (Q25, dc84fa8b's host-writer column at
- * `epics/9f080b75-0fa7-426c-a3ae-eba2c891662f/artifacts/host-rc2-update-rca/host-update-executor-cutover-plan/q25-cli-path-ownership/host-writer-column/index.md`):
+ * `epics/9f080b75-0fa7-426c-a3ae-eba2c891662f/artifacts/host-rc2-update-rca/host-update-executor-cutover-plan/q25-cli-path-ownership/host-writer-column/index.md`,
+ * read at internal `2f7b56435d`):
  * the host's AUTH plane is SLOT-scoped and its IDENTITY plane is
  * IDENTITY-scoped. For a dev-pool participant those are two different
  * directories on disk. So clean-on-absence for the auth marker and
@@ -355,7 +381,8 @@ export function hostIdentityNeedsReauthPath(
  * `identityPoolRoot()` to `~/.traycer/host/dev-runs/<slot>/identities` with no
  * other change, and the pool silently becomes per-slot. Q25, dc84fa8b's
  * host-writer column at
- * `epics/9f080b75-0fa7-426c-a3ae-eba2c891662f/artifacts/host-rc2-update-rca/host-update-executor-cutover-plan/q25-cli-path-ownership/host-writer-column/index.md`.
+ * `epics/9f080b75-0fa7-426c-a3ae-eba2c891662f/artifacts/host-rc2-update-rca/host-update-executor-cutover-plan/q25-cli-path-ownership/host-writer-column/index.md`,
+ * read at internal `2f7b56435d`.
  *
  * Read for EXISTENCE only. What it can establish is narrow and negative: with
  * no pool on this machine, no host here can have an overridden identity home,

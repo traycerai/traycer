@@ -669,13 +669,20 @@ function authenticatedRefusalReason(err: unknown): string | null {
   // beside a token whose whole contract is that it is a closed set of fixed
   // strings, and bounding it here bounds every consumer at once.
   //
-  // The sentence this replaces said the text was rendered in the GUI. That was
-  // TRUE when written - the generic failed card interpolated `Update failed:
-  // <host's words>` verbatim - and the Q23 GUI patch invalidated it for this
-  // code alone; other codes still render their own message. Recorded rather
-  // than quietly corrected, because "my justification decayed while the code
-  // stayed right" is the failure this round kept finding, and a cap justified
-  // by a consumer that no longer exists is the shape someone removes.
+  // Said plainly, because the correction below could otherwise be misread as
+  // narrowing the case: the cap is right ON THE DURABLE RECORD ALONE. Delete
+  // every GUI reader of this text and nothing about this line changes. The
+  // record is written under the attempt lock, survives the process, and is
+  // read back by later runs and by `host doctor`; that is sufficient on its
+  // own, and it always was.
+  //
+  // The sentence this replaces added that the text was RENDERED in the GUI.
+  // That was TRUE when written - the generic failed card interpolated `Update
+  // failed: <host's words>` verbatim - and the Q23 GUI patch invalidated it
+  // for this code alone; other codes still render their own message. Recorded
+  // rather than quietly corrected, because "my justification decayed while the
+  // code stayed right" is the failure this round kept finding, and a cap whose
+  // stated reason has evaporated is the shape someone removes.
   const detail = err.message.slice(0, REFUSAL_REASON_MAX_CHARS);
   const suffix = err.message.length > REFUSAL_REASON_MAX_CHARS ? "..." : "";
   return `${err.code}: ${detail}${suffix}`;
