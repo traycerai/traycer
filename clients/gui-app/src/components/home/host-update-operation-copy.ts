@@ -198,9 +198,18 @@ const PHASE_SENTENCE: Record<
   // transient. This sentence survives that change; a present-continuous one
   // would only have become correct by accident.
   //
-  // `to` already collapses to "" for an unreported target, so a host that named
-  // no version reads "Updated. The update record is still open; …" rather than
-  // "Updated to v.".
+  // `to` collapses to "" for a null target, so this can never read "Updated to
+  // v." — but that is a property of the FUNCTION, not a host state on this
+  // route. No such host exists here: `targetVersion` is `z.string().min(1)` on
+  // the wire (`protocol/host/status/contracts.ts`), `attemptOperationView`
+  // copies it unmodified, and it is the only producer of this kind. The null
+  // branch is reachable for other kinds, from the record and coarse legs.
+  //
+  // Stated that way because the earlier wording here claimed "a host that named
+  // no version reads …", asserting a reachability that does not hold — the AA3
+  // class, and with the same downstream cost: it is the sentence a reviewer
+  // would cite to justify writing the null pin as a host scenario, which is
+  // exactly what happened.
   "finalizing-record": ({ to }) =>
     `Updated${to}. The update record is still open; the next update reconciles it.`,
   // "Installed", not "Updated": the bytes are placed at the target and the host

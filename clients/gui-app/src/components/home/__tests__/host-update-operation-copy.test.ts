@@ -410,8 +410,20 @@ describe("describeUpdateOperation — finalizing-record", () => {
     );
   });
 
-  it("drops the version suffix when the host named no target, rather than reading 'to v.'", () => {
-    // The `to === ""` arm, which nothing else exercises.
+  it("the null-target arm of the pure function — not a host state on this route", () => {
+    // Exercises `to === ""`, which nothing else does.
+    //
+    // A UNIT test of a total function, deliberately not framed as a host
+    // scenario. `describeUpdateOperation` takes `targetVersion: string | null`
+    // so it must handle null, but no host can present one HERE:
+    // `targetVersion` is `z.string().min(1)` on the wire and
+    // `attemptOperationView` — the only producer of this kind — copies it
+    // unmodified. The branch is genuinely live for other kinds, which reach
+    // this module from the record and coarse legs with a null target.
+    //
+    // It was titled "when the host named no target" and that was wrong, in the
+    // AA3 class: a claim of reachability the wire contract forbids. Both null
+    // rows in this file carried it, from the same production comment.
     expect(
       describeUpdateOperation({
         view: finalizingView(null),
@@ -479,9 +491,13 @@ describe("describeUpdateOperation — verification-refused", () => {
     );
   });
 
-  it("drops the version when the host named no target, rather than reading 'v.'", () => {
-    // The `versionLabel(null)` arm. Reviewed by eye and never exercised until
-    // now — the same unexercised-branch shape as `finalizing-record`'s `to`.
+  it("the null-target arm of the pure function — not a host state on this route", () => {
+    // The `versionLabel(null)` arm: reviewed by eye, never exercised until now.
+    // Same standing as `finalizing-record`'s `to === ""` row above, and the
+    // same caveat — the signature admits null so the function must handle it,
+    // but `targetVersion` is `z.string().min(1)` on the wire and
+    // `attemptOperationView` is the only producer of this kind, so no host
+    // reaches it here.
     expect(
       describeUpdateOperation({
         view: refusedView(null),
