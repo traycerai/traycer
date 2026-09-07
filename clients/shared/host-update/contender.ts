@@ -1200,11 +1200,25 @@ async function dispositionForAttempt(
  *  | `readClaimRefresh` (Q5, `host/update-run.ts`) | proceed — fails OPEN | it is refreshing a baseline, not authorizing an activation; refusing there would strand attempts over a read |
  *  | the Q9 active arm | never asks | deliberate: post-swap the record's baseline is STALE, so a claim test there would compare against the pre-swap install and refuse correct relaunches |
  *
- * The third column is the one that gets misread. The Q9 arm is not "failing
- * open" — it does not consult the claim at all, and `RW-Q6` reddens if someone
- * adds a claim test to it. Q12 does not change this: it made the swap record
- * the generation it wrote, which fixes what the baseline SAYS, not whether that
- * arm is entitled to ask.
+ * The third row is the one that gets misread, and its cell was rewritten once
+ * for exactly that reason (cold review B). It used to LEAD with "post-swap the
+ * record's baseline is STALE", which post-Q12 is false of any record a current
+ * CLI wrote: `applyArm` / `downgradeArm` refresh across `applying ->
+ * restarting`, so that baseline names the swapped install. Staleness is now
+ * the RESIDUAL reason - true of a pre-Q12 record and of one whose swap-time
+ * read failed - and it is kept as the additional reason, not the headline.
+ *
+ * The durable reason is entitlement, and it does not decay: this arm is not
+ * authorizing an activation, so it has no business consulting an
+ * authorization. That holds for every record, including one whose baseline is
+ * perfectly fresh. The Q9 arm is therefore not "failing open" either - it does
+ * not consult the claim at all, and `RW-Q6` reddens if someone adds a test.
+ * Q12 fixed what the baseline SAYS; it never touched whether this arm may ask.
+ *
+ * The ordering inside the cell is the point, not pedantry. A table is what a
+ * reader trusts first, and this one exists to stop someone "making the three
+ * consistent" - so a cell leading with a reason that has since become
+ * conditional invites exactly the edit the table was built to prevent.
  *
  * A park whose baseline could not be REFRESHED is inadmissible for the same
  * reason, and today it is so silently. `readClaimRefresh` returns

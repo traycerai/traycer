@@ -695,20 +695,39 @@ describe("Windows service stale host cleanup", () => {
         })
         .catch(() => undefined);
 
+      // The SEQUENCE, not two independent existence checks (cold review B).
+      // The `/End` half used to be `calls.some(...) === false`, which is
+      // vacuously true on an empty call set: delete the relaunch entirely and
+      // it still passed, protected only by the `/Run` assertion happening to
+      // sit beside it. As a sequence the two failure directions separate -
+      // adding an `/End` and dropping the `/Run` each redden this line on
+      // their own, and neither can be masked by the other. Both were RUN:
+      // relaunch made a no-op gives `[] !== ["/Run", "/Query"]`, and an
+      // `/End` issued before the `/Run` gives `["/End", "/Run", "/Query"]`.
+      // Distinct messages, so a failure says WHICH direction broke.
+      //
+      // `/Query` is start verification, a separate contract with its own
+      // rows. It is named here because a sequence that omitted it would be a
+      // sequence of the calls this test likes rather than of the calls made,
+      // and the first thing anyone adding an `/End` would do is discover that
+      // the "sequence" tolerated extra members.
       expect(
-        calls.some(
-          (call) =>
-            call.command === "schtasks" &&
-            call.args[0] === "/Run" &&
-            call.args.includes("\\Traycer\\Host-Staging"),
-        ),
-      ).toBe(true);
-      // And never `/End` - the relaunch half must not re-enter the stop half.
+        calls
+          .filter((call) => call.command === "schtasks")
+          .map((call) => call.args[0]),
+      ).toEqual(["/Run", "/Query"]);
+      // WHOLE ARGV for the call this pin is actually about, so an extra or
+      // reordered argument cannot appear silently - the weakness of an
+      // existence check over a partial shape, and the reason Q17's pins
+      // compare whole argv. Deliberately NOT extended to the `/Query` call:
+      // that would couple this row to verification's argument list, which is
+      // owned and pinned elsewhere. The sub-command sequence above is what
+      // binds it here.
       expect(
-        calls.some(
-          (call) => call.command === "schtasks" && call.args[0] === "/End",
-        ),
-      ).toBe(false);
+        calls.find(
+          (call) => call.command === "schtasks" && call.args[0] === "/Run",
+        )?.args,
+      ).toEqual(["/Run", "/TN", "\\Traycer\\Host-Staging"]);
     } finally {
       setWindowsStartEvidenceDepsForTests(null);
     }

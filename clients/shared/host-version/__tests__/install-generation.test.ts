@@ -264,19 +264,36 @@ describe("encodeInstallGeneration call sites", () => {
     // read files the lists already name, so the register's headline claim -
     // that a NEW hand-built literal reddens - was false as first written.
     const discovered = discoveredCallers();
-    // The scan's OWN failure mode, asserted rather than left to luck (cold
-    // review B; dc84fa8b's absence-vs-count shape). A scan that finds nothing
-    // returns `[]`, and `[]` fails the comparison below only because the
-    // union happens to be non-empty today - so the register would go red for
-    // an accidental reason and, if the lists ever emptied, for none at all.
+    // A TRIPWIRE, and unfalsifiable in a healthy tree by design (cold review
+    // B; dc84fa8b's absence-vs-count shape). Nothing anyone does to the
+    // MIGRATION state of this codebase can make it fail - only a broken scan
+    // can - so it will look like a line that cannot fail, and that is the
+    // point rather than a defect. It is written down because a tripwire
+    // nobody recognises as one is a line somebody deletes as dead weight.
     //
-    // Precisely which path this covers, since the obvious one is already
-    // handled: `git grep -l` exits nonzero on no match and `execFileSync`
-    // throws, so a genuine zero-match is loud. What is NOT loud is a scan
-    // that succeeds and is then filtered to nothing - a moved encoder module,
-    // a renamed `__tests__`, a pathspec that stops matching. That returns an
-    // empty list through a green `git`, and this assertion is the only thing
-    // that can tell it from "the tree really has no callers".
+    // Without it, `[]` fails the comparison below only because the union
+    // happens to be non-empty today: the register would go red for an
+    // accidental reason, and for none at all if the lists ever emptied.
+    //
+    // WHICH path it covers, since the obvious one is already handled: `git
+    // grep -l` exits nonzero on no match and `execFileSync` throws, so a
+    // genuine zero-match is loud. What is NOT loud is a scan that SUCCEEDS
+    // and is then filtered to nothing - a moved encoder module, a renamed
+    // `__tests__`. The floor sits after the filter for exactly that reason.
+    //
+    // Both worlds were RUN rather than reasoned about, and they do not fail
+    // the same way:
+    //
+    //  - pathspec pointed at a nonexistent directory: `git` exits nonzero and
+    //    `execFileSync` throws, so this row fails with `Command failed: git
+    //    grep -l ...` at the call site. Loud, and it names the scan. The floor
+    //    is never reached - so B's suggested broken world exercises the THROW
+    //    path, not this line.
+    //  - filter forced to drop every line (the scan itself green): this
+    //    assertion fires, `expected 0 to be greater than 0`, BEFORE the union
+    //    comparison. That ordering is what was being checked - the reader gets
+    //    "the scan found nothing" instead of a nine-element set diff that
+    //    reads like nine callers went missing.
     expect(discovered.length).toBeGreaterThan(0);
     const known = [...MIGRATED_CALLERS, ...PENDING_LITERAL_CALLERS].sort();
     expect(discovered).toEqual(known);
