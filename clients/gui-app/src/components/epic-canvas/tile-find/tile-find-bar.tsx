@@ -22,6 +22,7 @@ import {
   useTileFindStore,
 } from "@/stores/tile-find/tile-find-store";
 import type { TileFindStateSnapshot } from "@/stores/tile-find/types";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 // Chat search scans the whole transcript, so keystrokes are coalesced into a
@@ -56,6 +57,7 @@ export function TileFindBar(props: TileFindBarProps) {
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const searchDebounceRef = useRef<number | null>(null);
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLElement>();
 
   const debounceSearch = tileKind === "chat";
 
@@ -271,8 +273,8 @@ export function TileFindBar(props: TileFindBarProps) {
 
   return (
     <search
+      ref={registerOverlayRef}
       data-testid="tile-find-bar"
-      data-browser-overlay="tile-find-bar"
       className={cn(
         "pointer-events-auto absolute right-3 top-3 z-30 flex max-w-[min(92vw,42rem)] gap-1 rounded-md border border-border bg-popover px-2 py-1 shadow-md",
         replaceEnabled ? "items-start" : "flex-wrap items-center",

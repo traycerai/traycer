@@ -76,6 +76,9 @@ vi.mock("sonner", () => ({
   toast: toastMock,
 }));
 
+const openLink = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
+
 const IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
   sequence: 0,
   status: "idle",
@@ -539,9 +542,6 @@ describe("desktop app update UI", () => {
 
   it("renders the manual-install steps and command, and opens the release page", () => {
     const host = makeHost(new FakeAppUpdatesBridge(readySnapshot(1)));
-    const openExternalLink = vi
-      .spyOn(host, "openExternalLink")
-      .mockResolvedValue(undefined);
     const onOpenChange = vi.fn();
     render(
       <RunnerHostProvider runnerHost={host}>
@@ -562,7 +562,11 @@ describe("desktop app update UI", () => {
     screen.getByText(READY_GUIDANCE.command ?? "");
 
     fireEvent.click(screen.getByRole("button", { name: "View release page" }));
-    expect(openExternalLink).toHaveBeenCalledWith(READY_GUIDANCE.releaseUrl);
+    expect(openLink).toHaveBeenCalledWith(
+      READY_GUIDANCE.releaseUrl,
+      "docs",
+      null,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Got it" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);

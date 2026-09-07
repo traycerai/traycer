@@ -116,6 +116,21 @@ inset-0` and marked `data-full-bleed-surface`, so it takes the viewport
 - No `key={x ?? fallback}` when `undefined` already remounts correctly.
 - Zustand = client UI state; TanStack Query = server/host data.
 - Keep browser-safe unless the task adds a native host.
+- **Browser-tile overlay registration is explicit, not a DOM scan**
+  (`docs/adr/0001-browser-tile-rendering.md`). Mounting an overlay
+  primitive registers a live rect with the browser-tile occlusion
+  coordinator; unmounting deregisters. The shadcn wrappers in
+  `src/components/ui/` (Dialog, Popover, Select, DropdownMenu, Tooltip,
+  ContextMenu, sonner's `Toaster`) are the **only** registration seam -
+  importing a Radix portal primitive directly outside them is banned by the
+  `overlayPortal` ESLint block, and a dev-build tripwire
+  (`unregistered-portal-tripwire.ts`) flags any portal-root child painting
+  without a matching registry entry, to catch hand-rolled and third-party
+  portals the lint rule can't see. The visibility predicate reads paint
+  signals only - `aria-hidden` must never enter it; that exact misread
+  caused a settings-panel flash. Canvas motion (scroll/pane animation/resize)
+  freezes a tile through the same registry as a synthetic owner
+  (`browser-overlay-motion:<tileKey>`), not a second mechanism.
 
 ## Backend calls → TanStack Query
 
@@ -271,6 +286,22 @@ user's audio to a machine they only picked to execute a turn on, and drop a
 model download there. The cost is real and accepted — a composer pinned to
 host B gates its mic on the app-wide host's model, not B's. Scope a NEW
 composer RPC to the target host unless it is about the human's input devices.
+
+## Opening seams (links + tiles)
+
+Two boundaries, both enforced by `eslint/traycer-tile-open-boundary-rules.mjs`
+(a `no-restricted-syntax` dimension in `eslint.config.mjs`, so oxlint gets it
+through `oxlint-config-adapter.mjs` too):
+
+- **URL egress** — `useOpenLink()(url, kind, event)` (`lib/links/open-link.ts`),
+  never a raw `openExternalLink`, `window.open`, or `target="_blank"`. Pick the
+  `LinkKind`; it decides in-app vs external.
+- **Tile open** — `useEpicTileNavigation().openTile(intent)` (or
+  `openTileWithNavigation` outside a component), never a
+  `prepare*FocusTarget` action. The intent carries placement, dedupe and source.
+
+Exemptions are per file with a stated reason in `eslint.config.mjs`; the
+nested-focus dimension still bans the raw store actions underneath.
 
 ## Routing
 

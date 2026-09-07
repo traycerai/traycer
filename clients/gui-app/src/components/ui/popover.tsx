@@ -7,6 +7,8 @@ import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { cn } from "@/lib/utils";
+import { useComposedRefs } from "radix-ui/internal";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 function Popover({
   ...props
@@ -29,6 +31,7 @@ type PopoverContentProps = React.ComponentProps<
 };
 
 function PopoverContent({
+  ref,
   className,
   align = "center",
   sideOffset = 4,
@@ -52,12 +55,14 @@ function PopoverContent({
   // default width cap; both are displaceable by a caller (see
   // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`).
   const safeAreaInsets = useSafeAreaCollisionPadding();
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
+  const composedRef = useComposedRefs(ref, registerOverlayRef);
   if (!paneFocused || concealed) return null;
   return (
     <PopoverPrimitive.Portal container={container}>
       <PopoverPrimitive.Content
+        ref={composedRef}
         data-slot="popover-content"
-        data-browser-overlay="popover"
         align={align}
         sideOffset={sideOffset}
         collisionPadding={collisionPadding ?? safeAreaInsets}

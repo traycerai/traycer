@@ -16,6 +16,7 @@ import {
   installCustomLogLevelsBridge,
   installHeapSnapshotBridge,
   installHeldLogLevelsBridge,
+  installJsHeapBridge,
   installLogLevelsBridge,
   makeHost,
   makeSupportBridge,
@@ -28,6 +29,8 @@ import type {
   DesktopSupportLogTarget,
   DesktopSupportSnapshot,
 } from "@/lib/windows/types";
+import type { DesktopJsHeapBreakdown } from "@/lib/resources/desktop-app-resource-usage";
+import { formatMemoryBytes } from "@/lib/resources/format-resource-usage";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { toast } from "sonner";
@@ -424,5 +427,253 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
     });
     const path = await screen.findByTestId("diagnostics-heap-snapshot-path");
     expect(path.textContent).toBe("/tmp/heap-1.heapsnapshot");
+  });
+
+  it("renders the Measure JS heaps button without a heap-snapshot bridge", async () => {
+    installLogLevelsBridge(defaultSnapshot());
+    installJsHeapBridge(() => Promise.resolve(null));
+    renderPanel(makeHost(makeSupportBridge({})));
+
+    await screen.findByRole("heading", { name: "Memory" });
+    expect(
+      screen.getByRole("button", { name: "Measure JS heaps" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Capture heap snapshot" }),
+    ).toBeNull();
+    expect(
+      screen.queryByText(
+        "Memory snapshots are only available on the desktop app.",
+      ),
+    ).toBeNull();
+  });
+
+  it("does not render the Measure JS heaps button when the bridge is not installed", async () => {
+    installLogLevelsBridge(defaultSnapshot());
+    installHeapSnapshotBridge(() => Promise.resolve(null));
+    renderPanel(makeHost(makeSupportBridge({})));
+
+    await screen.findByRole("heading", { name: "Memory" });
+    expect(
+      screen.queryByRole("button", { name: "Measure JS heaps" }),
+    ).toBeNull();
+  });
+
+  it("measures JS heaps and renders a labeled breakdown table with a totals footer", async () => {
+    installLogLevelsBridge(defaultSnapshot());
+    installHeapSnapshotBridge(() => Promise.resolve(null));
+    const breakdown: DesktopJsHeapBreakdown = {
+      capturedAt: 1_700_000_000_000,
+      workingSetBytes: 300 * 1024 * 1024,
+      isolates: [
+        {
+          kind: "page",
+          url: "app://renderer/index.html",
+          usedBytes: 40 * 1024 * 1024,
+          totalBytes: 60 * 1024 * 1024,
+          embedderBytes: null,
+          backingStorageBytes: null,
+        },
+        {
+          kind: "worker",
+          url: "app://renderer/assets/epic-runtime-worker-entry-BKyjY2bC.js",
+          usedBytes: 10 * 1024 * 1024,
+          totalBytes: 15 * 1024 * 1024,
+          embedderBytes: null,
+          backingStorageBytes: null,
+        },
+        {
+          kind: "worker",
+          url: "app://renderer/assets/worker-DMI2JaPh.js",
+          usedBytes: 5 * 1024 * 1024,
+          totalBytes: 8 * 1024 * 1024,
+          embedderBytes: null,
+          backingStorageBytes: null,
+        },
+      ],
+    };
+    const measureJsHeaps = vi.fn(() =>
+      Promise.resolve<DesktopJsHeapBreakdown | null>(breakdown),
+    );
+    installJsHeapBridge(measureJsHeaps);
+    renderPanel(makeHost(makeSupportBridge({})));
+
+    const button = await screen.findByRole("button", {
+      name: "Measure JS heaps",
+    });
+    expect(screen.queryByRole("table")).toBeNull();
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(measureJsHeaps).toHaveBeenCalled();
+    });
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("This window")).toBeTruthy();
+    expect(within(table).getByText("Epic runtime worker")).toBeTruthy();
+    expect(within(table).getByText("Diff highlighter worker")).toBeTruthy();
+
+    const usedTotal = breakdown.isolates.reduce(
+      (sum, isolate) => sum + isolate.usedBytes,
+      0,
+    );
+    const committedTotal = breakdown.isolates.reduce(
+      (sum, isolate) => sum + isolate.totalBytes,
+      0,
+    );
+    expect(
+      within(table).getByText(
+        (_content, element) =>
+          element?.textContent ===
+          `3 isolates · process working set ${formatMemoryBytes(300 * 1024 * 1024)}`,
+      ),
+    ).toBeTruthy();
+    expect(within(table).getByText(formatMemoryBytes(usedTotal))).toBeTruthy();
+    expect(
+      within(table).getByText(formatMemoryBytes(committedTotal)),
+    ).toBeTruthy();
+  });
+
+  it("renders the Embedder and Backing columns, using — for a null isolate value and a null column total", async () => {
+    installLogLevelsBridge(defaultSnapshot());
+    installHeapSnapshotBridge(() => Promise.resolve(null));
+    const breakdown: DesktopJsHeapBreakdown = {
+      capturedAt: 1_700_000_000_000,
+      workingSetBytes: null,
+      isolates: [
+        {
+          kind: "page",
+          url: "app://renderer/index.html",
+          usedBytes: 40 * 1024 * 1024,
+          totalBytes: 60 * 1024 * 1024,
+          embedderBytes: 5 * 1024 * 1024,
+          backingStorageBytes: null,
+        },
+        {
+          kind: "worker",
+          url: "app://renderer/assets/worker-DMI2JaPh.js",
+          usedBytes: 3 * 1024 * 1024,
+          totalBytes: 4 * 1024 * 1024,
+          embedderBytes: null,
+          backingStorageBytes: null,
+        },
+      ],
+    };
+    const measureJsHeaps = vi.fn(() =>
+      Promise.resolve<DesktopJsHeapBreakdown | null>(breakdown),
+    );
+    installJsHeapBridge(measureJsHeaps);
+    renderPanel(makeHost(makeSupportBridge({})));
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Measure JS heaps" }),
+    );
+    await waitFor(() => {
+      expect(measureJsHeaps).toHaveBeenCalled();
+    });
+
+    const table = await screen.findByRole("table");
+    expect(
+      within(table).getByRole("columnheader", { name: "Live" }),
+    ).toBeTruthy();
+    expect(
+      within(table).getByRole("columnheader", { name: "Committed" }),
+    ).toBeTruthy();
+    expect(
+      within(table).getByRole("columnheader", { name: "Embedder" }),
+    ).toBeTruthy();
+    expect(
+      within(table).getByRole("columnheader", { name: "Backing" }),
+    ).toBeTruthy();
+
+    const [pageRow, workerRow, footerRow] = within(table)
+      .getAllByRole("row")
+      .slice(1);
+    const pageCells = within(pageRow).getAllByRole("cell");
+    const workerCells = within(workerRow).getAllByRole("cell");
+    const footerCells = within(footerRow).getAllByRole("cell");
+
+    // Page row: Embedder carries a real number, Backing is null.
+    expect(pageCells[3].textContent).toBe(formatMemoryBytes(5 * 1024 * 1024));
+    expect(pageCells[4].textContent).toBe("—");
+    // Worker row: both out-of-heap columns are null.
+    expect(workerCells[3].textContent).toBe("—");
+    expect(workerCells[4].textContent).toBe("—");
+    // Footer: Embedder totals the one isolate that reported a number;
+    // Backing stays — because every isolate reported null for it.
+    expect(footerCells[3].textContent).toBe(formatMemoryBytes(5 * 1024 * 1024));
+    expect(footerCells[4].textContent).toBe("—");
+  });
+
+  it("toasts when measuring JS heaps returns null", async () => {
+    installLogLevelsBridge(defaultSnapshot());
+    installHeapSnapshotBridge(() => Promise.resolve(null));
+    const measureJsHeaps = vi.fn(() =>
+      Promise.resolve<DesktopJsHeapBreakdown | null>(null),
+    );
+    installJsHeapBridge(measureJsHeaps);
+    renderPanel(makeHost(makeSupportBridge({})));
+
+    const button = await screen.findByRole("button", {
+      name: "Measure JS heaps",
+    });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't measure this window's JS heaps",
+      );
+    });
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("serializes the heap snapshot and the JS heap measurement through their shared mutation scope", async () => {
+    installLogLevelsBridge(defaultSnapshot());
+    // Seeded with a callable rather than `null`: the executor runs
+    // synchronously, but TypeScript cannot see that and narrows a
+    // `null`-initialised binding to `null` for the rest of the test.
+    let resolveCapture: (path: string | null) => void = () => undefined;
+    const capturePromise = new Promise<string | null>((resolve) => {
+      resolveCapture = resolve;
+    });
+    const takeHeapSnapshot = vi.fn(() => capturePromise);
+    installHeapSnapshotBridge(takeHeapSnapshot);
+    const measureJsHeaps = vi.fn(() =>
+      Promise.resolve<DesktopJsHeapBreakdown | null>(null),
+    );
+    installJsHeapBridge(measureJsHeaps);
+    renderPanel(makeHost(makeSupportBridge({})));
+
+    const captureButton = await screen.findByTestId(
+      "diagnostics-capture-heap-snapshot",
+    );
+    const measureButton = await screen.findByRole("button", {
+      name: "Measure JS heaps",
+    });
+
+    fireEvent.click(captureButton);
+    await waitFor(() => {
+      expect(takeHeapSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    // The measure button is its own mutation observer - it is not disabled by
+    // capture being pending, so this click genuinely fires
+    // `measureMutation.mutate()` rather than being a no-op the panel refuses.
+    expect(measureButton.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(measureButton);
+
+    // Let the click's mutate() call and TanStack Query's shared-scope check
+    // settle before asserting the negative: the bridge fn itself must not
+    // have run yet, because it is queued behind the still-pending capture.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(measureJsHeaps).not.toHaveBeenCalled();
+
+    resolveCapture("/tmp/heap-1.heapsnapshot");
+
+    await waitFor(() => {
+      expect(measureJsHeaps).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -15,10 +15,8 @@ import type {
 import { BrowserSessionsStreamClient } from "@traycer-clients/shared/host-transport/browser-sessions-stream-client";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { appLogger } from "@/lib/logger";
-import {
-  browserSessionsLifecycle,
-  browserSessionsReducer,
-} from "../sessions/browser-sessions-stream";
+import { browserSessionsLifecycle } from "@traycer-clients/shared/platform/browser-view";
+import { browserSessionsReducer } from "../sessions/browser-sessions-stream";
 import { applyPipCaption, applyPipHostLifecycle } from "./pip-store";
 
 interface HostSlot {

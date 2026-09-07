@@ -57,6 +57,7 @@ interface ProviderRailProps {
   readonly onRetryPack: (providerId: ProviderId) => void;
   readonly onOpenProviderSettings: () => void;
   readonly onRefresh: () => Promise<void>;
+  readonly refreshDisabledReason: string | undefined;
 }
 
 export function ProviderRail(props: ProviderRailProps) {
@@ -74,6 +75,7 @@ export function ProviderRail(props: ProviderRailProps) {
     onRetryPack,
     onOpenProviderSettings,
     onRefresh,
+    refreshDisabledReason,
   } = props;
   const entries = visibleRailEntries({
     harnesses,
@@ -118,6 +120,7 @@ export function ProviderRail(props: ProviderRailProps) {
       <RefreshIconButton
         onRefresh={onRefresh}
         label="Refresh providers & models"
+        disabledReason={refreshDisabledReason}
         className="mt-1"
       />
       <TooltipWrapper

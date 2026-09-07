@@ -574,9 +574,6 @@ function ComposerSurface(props: {
             key={`${model.composer.nodeId}:${model.interview.pending.blockId}`}
             chatId={model.composer.nodeId}
             blockId={model.interview.pending.blockId}
-            toolName={model.interview.pending.toolName}
-            title={model.interview.pending.title}
-            description={model.interview.pending.description}
             questions={model.interview.pending.questions}
             isActive={model.composer.isActive}
             isBusy={model.interview.isBusy}

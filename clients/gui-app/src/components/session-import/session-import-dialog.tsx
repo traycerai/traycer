@@ -6,6 +6,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { SessionImportWizard } from "@/components/session-import/session-import-wizard";
+import { useSessionImportScan } from "@/components/session-import/use-session-import-scan";
+import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 
 /**
  * The wizard as a Settings dialog. Closing it does not stop an import that has
@@ -14,6 +16,11 @@ import { SessionImportWizard } from "@/components/session-import/session-import-
  */
 export function SessionImportDialog(props: { readonly onClose: () => void }) {
   const { onClose } = props;
+  // The scan lives as long as the dialog is open and pauses while a run owns
+  // the screen; the wizard retires a finished run on mount, which is what
+  // brings the scan back for a second visit.
+  const runIdle = useSessionImportRunStore((state) => state.status === "idle");
+  const scan = useSessionImportScan(runIdle);
   return (
     <Dialog
       open
@@ -38,12 +45,12 @@ export function SessionImportDialog(props: { readonly onClose: () => void }) {
         <div className="-mx-4 -mb-4 flex min-h-0 flex-1 flex-col">
           <SessionImportWizard
             surface="dialog"
+            scan={scan}
             // Submit means go: the dialog gets out of the way and the app-wide
             // progress toast takes over. Reopening while the run is live shows
             // the inline progress view - this closes a surface, never a run.
             onImportStarted={onClose}
             secondaryAction={{ label: "Close", onSelect: onClose }}
-            registerSubmit={null}
           />
         </div>
       </DialogContent>

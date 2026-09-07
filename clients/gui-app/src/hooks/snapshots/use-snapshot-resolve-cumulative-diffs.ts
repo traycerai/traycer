@@ -7,6 +7,7 @@ import type { ResolvedSnapshotDiff } from "@/lib/chat/resolve-snapshot-diff-cont
 import type { SnapshotDiffTilePayload } from "@/stores/epics/canvas/types";
 import { resolveSnapshotDiffContents } from "@/lib/chat/resolve-snapshot-diff-content";
 import {
+  contentlessAccumulatedChangePaths,
   fetchableAccumulatedChanges,
   mergeCumulativeDiffs,
   type CumulativeDiffResolution,
@@ -88,6 +89,13 @@ export function useSnapshotResolveCumulativeDiffs(args: {
     () => fetchableAccumulatedChanges(filePaths, hostRows),
     [filePaths, hostRows],
   );
+  // Rows that get a section without a download - a bundle's PDF rows. Split
+  // out here rather than dropped, because dropping them would silently lose
+  // the section: `snapshotBundleSectionEntries` is built from `resolved`.
+  const contentless = useMemo(
+    () => contentlessAccumulatedChangePaths(filePaths, hostRows),
+    [filePaths, hostRows],
+  );
   // Paths this tile shows that `hostRows` says nothing about YET. Zero once the
   // set is complete, at which point an absent path really is a reverted one.
   const undeliveredPaths = useMemo(() => {
@@ -146,6 +154,7 @@ export function useSnapshotResolveCumulativeDiffs(args: {
         filePaths,
         inline,
         fetchable,
+        contentless,
         undeliveredPaths,
         fetches: contentQueries.map((query) => ({
           isLoading: query.isLoading,
@@ -155,6 +164,13 @@ export function useSnapshotResolveCumulativeDiffs(args: {
           isError: query.isError,
         })),
       }),
-    [contentQueries, fetchable, filePaths, inline, undeliveredPaths],
+    [
+      contentQueries,
+      contentless,
+      fetchable,
+      filePaths,
+      inline,
+      undeliveredPaths,
+    ],
   );
 }

@@ -16,7 +16,7 @@ import {
   useHostDirectory,
   type HostRpcRegistry,
 } from "@/lib/host";
-import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
+import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, terminalMutationKeys } from "@/lib/query-keys";
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
@@ -108,5 +108,5 @@ function clientForLandingTerminal(
   // The app-default client resolves its endpoint on every retry. Always use a
   // transient client pinned to the tab host, even when that host is selected,
   // so a host switch during backoff can never redirect a destructive RPC.
-  return buildTransientHostClient(defaultClient, entry);
+  return buildDialableHostClient(defaultClient, entry);
 }

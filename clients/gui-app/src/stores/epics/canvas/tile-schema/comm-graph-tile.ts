@@ -20,12 +20,38 @@ import { readTileInstanceId } from "./instance-id";
 
 export const COMM_GRAPH_TILE_NAME = "Communication graph";
 
-/** Neutral starting viewport; the canvas fits the graph on first layout. */
+/**
+ * Neutral starting viewport; the canvas fits the graph on first layout.
+ *
+ * `mode` defaults to the office floor - it is the readable rendering of the
+ * same projection, and the node graph stays one click away.
+ */
 export const DEFAULT_COMM_GRAPH_VIEW: CommGraphTileViewState = {
   x: 0,
   y: 0,
   zoom: 1,
+  mode: "office",
 };
+
+/**
+ * Whether this tile has never been framed by the user, so the renderer should
+ * derive its own first viewport.
+ *
+ * `mode` is deliberately NOT compared: it is a rendering choice, not a framing.
+ * Folding it in would mean a tile that was only ever toggled to the office and
+ * back reads as user-framed at the schema default, and would then open at
+ * (0, 0) zoom 1 instead of fitting.
+ *
+ * Lives beside the default it compares against, and not in either renderer:
+ * both ask the same question of the same schema value.
+ */
+export function isDefaultCommGraphView(view: CommGraphTileViewState): boolean {
+  return (
+    view.x === DEFAULT_COMM_GRAPH_VIEW.x &&
+    view.y === DEFAULT_COMM_GRAPH_VIEW.y &&
+    view.zoom === DEFAULT_COMM_GRAPH_VIEW.zoom
+  );
+}
 
 export function commGraphTileId(epicId: string): string {
   return `comm-graph:${epicId}`;
@@ -51,18 +77,43 @@ function readFiniteNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+/**
+ * What a PERSISTED tile falls back to when its view is unreadable.
+ *
+ * The mode deliberately differs from {@link DEFAULT_COMM_GRAPH_VIEW}: a tile
+ * saved before the office existed rendered the node graph, so reopening it on
+ * the floor would change what a person already had open. Only a tile created
+ * NOW starts on the floor.
+ */
+const PERSISTED_COMM_GRAPH_VIEW: CommGraphTileViewState = {
+  ...DEFAULT_COMM_GRAPH_VIEW,
+  mode: "graph",
+};
+
+/**
+ * Anything that is not the literal `"office"` reads as the node graph. That
+ * covers a tile persisted before the mode existed - which rendered the graph,
+ * and must keep rendering it - as well as a value from a future build, which
+ * degrades to the rendering that has always existed rather than to a blank
+ * canvas.
+ */
+function readCommGraphViewMode(value: unknown): CommGraphTileViewState["mode"] {
+  return value === "office" ? "office" : "graph";
+}
+
 export function parseCommGraphTileViewState(
   value: unknown,
 ): CommGraphTileViewState {
-  if (!isRecord(value)) return DEFAULT_COMM_GRAPH_VIEW;
-  const zoom = readFiniteNumber(value.zoom, DEFAULT_COMM_GRAPH_VIEW.zoom);
+  if (!isRecord(value)) return PERSISTED_COMM_GRAPH_VIEW;
+  const zoom = readFiniteNumber(value.zoom, PERSISTED_COMM_GRAPH_VIEW.zoom);
   return {
-    x: readFiniteNumber(value.x, DEFAULT_COMM_GRAPH_VIEW.x),
-    y: readFiniteNumber(value.y, DEFAULT_COMM_GRAPH_VIEW.y),
+    x: readFiniteNumber(value.x, PERSISTED_COMM_GRAPH_VIEW.x),
+    y: readFiniteNumber(value.y, PERSISTED_COMM_GRAPH_VIEW.y),
     // A persisted zoom of 0 (or negative) would render an invisible canvas the
     // user cannot recover from, so it degrades to the default rather than
     // failing the whole tile.
-    zoom: zoom > 0 ? zoom : DEFAULT_COMM_GRAPH_VIEW.zoom,
+    zoom: zoom > 0 ? zoom : PERSISTED_COMM_GRAPH_VIEW.zoom,
+    mode: readCommGraphViewMode(value.mode),
   };
 }
 
@@ -94,7 +145,12 @@ function serializeCommGraphTileRef(ref: CommGraphTileRef): DesktopJsonValue {
     name: ref.name,
     hostId: ref.hostId,
     epicId: ref.epicId,
-    view: { x: ref.view.x, y: ref.view.y, zoom: ref.view.zoom },
+    view: {
+      x: ref.view.x,
+      y: ref.view.y,
+      zoom: ref.view.zoom,
+      mode: ref.view.mode,
+    },
   };
 }
 

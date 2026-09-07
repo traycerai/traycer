@@ -747,6 +747,202 @@ describe("service install lifecycle re-registration", () => {
   });
 });
 
+describe("runWithPublishedHostStartAdoption (via registerService's install)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.serviceLabelForMock.mockReturnValue(label);
+    mocks.resolveServiceCliInvocationMock.mockResolvedValue({
+      command: "/usr/local/bin/traycer",
+      args: [],
+    });
+    mocks.readRegisteredCliInvocationMock.mockResolvedValue(null);
+  });
+
+  it("waits for the adoption lease before surfacing a committed-registration error", async () => {
+    const lease = {
+      waitForSpawn: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+    };
+    const committedError = new CliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: "registered, but the record could not be committed",
+      details: {
+        label: "ai.traycer.host",
+        phase: "commit",
+        registrationCommitted: true,
+      },
+      exitCode: 1,
+    });
+    const harness = makeController("running");
+    harness.install.mockImplementation(async () => {
+      throw committedError;
+    });
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+    });
+    const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+    if (setPublisher === undefined) {
+      throw new Error("install lifecycle exposes no adoption publisher seam");
+    }
+    setPublisher(async () => lease);
+    await handle.lifecycle.beforeSwap();
+    await handle.lifecycle.afterSwap();
+
+    expect(handle.state.postSwapAction).toBe("install");
+    expect(handle.state.postSwapError).toContain("could not be committed");
+    expect(lease.waitForSpawn).toHaveBeenCalledTimes(1);
+    expect(lease.cancel).toHaveBeenCalledTimes(1);
+    expect(lease.waitForSpawn.mock.invocationCallOrder[0]).toBeLessThan(
+      lease.cancel.mock.invocationCallOrder[0] ?? Infinity,
+    );
+  });
+
+  it("does not wait for the adoption lease on an ordinary OS-actuator error", async () => {
+    const lease = {
+      waitForSpawn: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+    };
+    const osError = new Error("os-failed");
+    const harness = makeController("running");
+    harness.install.mockImplementation(async () => {
+      throw osError;
+    });
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+    });
+    const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+    if (setPublisher === undefined) {
+      throw new Error("install lifecycle exposes no adoption publisher seam");
+    }
+    setPublisher(async () => lease);
+    await handle.lifecycle.beforeSwap();
+    await handle.lifecycle.afterSwap();
+
+    expect(handle.state.postSwapError).toContain("os-failed");
+    expect(lease.waitForSpawn).not.toHaveBeenCalled();
+    expect(lease.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  // A rejecting `cancel()` must never replace the actuator error being
+  // reported: `finally { await lease?.cancel().catch(() => undefined); }`
+  // exists so a cleanup failure can never swap itself in for the real
+  // failure. `postSwapError` only ever carries an Error's `.message` (this
+  // branch never rethrows the raw object for a non-authority error), so
+  // `toBe` here pins the surfaced string to exactly `startError.message` -
+  // never the cancel error's message - which is the only identity check
+  // reachable through the public `createServiceInstallLifecycle` seam.
+  it("surfaces the start error, not a rejecting lease cancel, when both fail", async () => {
+    const startError = new Error("os-failed");
+    const cancelError = new Error("cancel blew up");
+    const lease = {
+      waitForSpawn: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => {
+        throw cancelError;
+      }),
+    };
+    const harness = makeController("running");
+    harness.install.mockImplementation(async () => {
+      throw startError;
+    });
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+    });
+    const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+    if (setPublisher === undefined) {
+      throw new Error("install lifecycle exposes no adoption publisher seam");
+    }
+    setPublisher(async () => lease);
+    await handle.lifecycle.beforeSwap();
+
+    await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
+    expect(handle.state.postSwapError).toBe(startError.message);
+    expect(lease.waitForSpawn).not.toHaveBeenCalled();
+    expect(lease.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  // Companion to the failing-start case above: a successful install with a
+  // rejecting `cancel()` must not turn a completed install into a reported
+  // failure either.
+  it("does not fail the install when a successful lease's cancel rejects", async () => {
+    const lease = {
+      waitForSpawn: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => {
+        throw new Error("cancel blew up");
+      }),
+    };
+    const harness = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+    });
+    const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+    if (setPublisher === undefined) {
+      throw new Error("install lifecycle exposes no adoption publisher seam");
+    }
+    setPublisher(async () => lease);
+    await handle.lifecycle.beforeSwap();
+
+    await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
+    expect(handle.state.postSwapAction).toBe("install");
+    expect(handle.state.postSwapError).toBeNull();
+    expect(lease.waitForSpawn).toHaveBeenCalledTimes(1);
+    expect(lease.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("still surfaces the original committed-registration error when the honoured wait itself rejects", async () => {
+    const lease = {
+      waitForSpawn: vi.fn(async () => {
+        throw new Error("spawn wait transport failed");
+      }),
+      cancel: vi.fn(async () => undefined),
+    };
+    const committedError = new CliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: "registered, but the lifecycle generation could not be written",
+      details: {
+        label: "ai.traycer.host",
+        phase: "lifecycle",
+        registrationCommitted: true,
+      },
+      exitCode: 1,
+    });
+    const harness = makeController("running");
+    harness.install.mockImplementation(async () => {
+      throw committedError;
+    });
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+    });
+    const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
+    if (setPublisher === undefined) {
+      throw new Error("install lifecycle exposes no adoption publisher seam");
+    }
+    setPublisher(async () => lease);
+    await handle.lifecycle.beforeSwap();
+    await handle.lifecycle.afterSwap();
+
+    expect(handle.state.postSwapError).toContain(
+      "lifecycle generation could not be written",
+    );
+    expect(lease.waitForSpawn).toHaveBeenCalledTimes(1);
+    expect(lease.cancel).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("swap-lock recovery wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();

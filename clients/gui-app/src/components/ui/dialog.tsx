@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+import { useComposedRefs } from "radix-ui/internal";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 function Dialog({
   ...props
@@ -48,6 +50,7 @@ function DialogOverlay({
 }
 
 function DialogContent({
+  ref,
   className,
   children,
   showCloseButton = true,
@@ -69,13 +72,15 @@ function DialogContent({
   // keeps its open state and the owner keeps any staged form state, ready to
   // re-present when the region returns.
   const concealed = usePortalConcealed();
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
+  const composedRef = useComposedRefs(ref, registerOverlayRef);
   if (!paneFocused || concealed) return null;
   return (
     <DialogPortal>
       <DialogOverlay />
       <DialogPrimitive.Content
+        ref={composedRef}
         data-slot="dialog-content"
-        data-browser-overlay="dialog"
         className={cn(
           // `top-safe-center-y` / `left-safe-center-x`, not `top-1/2` /
           // `left-1/2`: a fixed element centres on the viewport, which on a

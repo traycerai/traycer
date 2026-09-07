@@ -40,8 +40,12 @@ import {
  * Playback is EVENT-PACED, not wall-clock-paced: replaying real inter-event
  * gaps would sit still for the minutes an agent spent thinking. One step per
  * tick, scaled by speed, keeps a long session watchable.
+ *
+ * Exported because an animated renderer has to fit a per-row animation inside
+ * one step: reading the same constant is what keeps an envelope from still
+ * being in flight when the cursor has moved two rows on.
  */
-const BASE_STEP_MS = 700;
+export const BASE_STEP_MS = 700;
 
 export interface CommGraphTransport {
   /** `null` = live: the cursor tracks the newest row as rows arrive. */

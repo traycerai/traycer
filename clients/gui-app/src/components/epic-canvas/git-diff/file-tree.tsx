@@ -13,25 +13,28 @@ import { buildGitTreeDirectoryPaths } from "@/lib/git/panel-file-rendering";
 import { GIT_PANEL_PIERRE_FILE_TREE_THEME_STYLE } from "@/components/epic-canvas/pierre-tree-theme";
 import { extractPierreItemPathFromEvent } from "@/components/epic-canvas/pierre-tree-adapter";
 import { usePierreCanvasDragBridge } from "@/components/epic-canvas/dnd/use-pierre-canvas-drag-bridge";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import {
+  modifiersFromMouseEvent,
+  type TileOpenGesture,
+} from "@/lib/canvas/tile-open/intent";
 import { useShadowScrollerTouchShield } from "@/hooks/ui/use-shadow-scroller-touch-shield";
 import {
   GIT_DIFF_TILE_DND_TYPE,
   getGitDiffTileDragId,
   type EpicCanvasDragSourceData,
 } from "@/components/epic-canvas/dnd/dnd";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeGitFileDiffTileForFile } from "@/lib/git/git-diff-tile";
 import type {
   GitDiffBundleGroup,
   GitDiffRepositoryContext,
   GitDiffTileRef,
 } from "@/stores/epics/canvas/types";
-import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import type { GitDiffSectionCollapseController } from "./git-diff-section";
 import { GitFileSectionStack } from "./git-file-section-stack";
 import type { GitFileSectionBodyRenderProps } from "./git-file-section-stack";
 import { useGitPierreFileTreeModel } from "./use-git-pierre-file-tree-model";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 export interface FileTreeProps {
   readonly epicId: string;
@@ -157,13 +160,7 @@ function isDirectoryHandle(
 }
 
 function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTilePreviewInTabFocusTarget,
-  );
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   const { model, fileByPath, paths, rowDirectoryPaths } =
     useGitPierreFileTreeModel(props.files);
   const selectVisibleRowCount = useCallback(
@@ -215,36 +212,37 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
     [fileByPath, props.hostId, props.repositoryContext, props.runningDir],
   );
 
-  const openFile = useCallback(
-    (
-      treePath: string,
-      open: (tabId: string, tile: GitDiffTileRef) => NestedFocusTarget | null,
-    ) => {
+  const openFileFromTreeRow = useCallback(
+    (event: MouseEvent<HTMLElement>, gesture: TileOpenGesture) => {
+      const treePath = extractPierreItemPathFromEvent(event);
+      if (treePath === null) return;
       const tile = tileForTreePath(treePath);
       if (tile === null) return;
-      navigateNested(props.epicId, props.viewTabId, () =>
-        open(props.viewTabId, tile),
-      );
+      openTile({
+        node: tile,
+        target: { tabId: props.viewTabId },
+        gesture,
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
     },
-    [navigateNested, props.epicId, props.viewTabId, tileForTreePath],
+    [openTile, props.viewTabId, tileForTreePath],
   );
 
   const previewFileFromTreeRow = useCallback(
     (event: MouseEvent<HTMLElement>) => {
-      const treePath = extractPierreItemPathFromEvent(event);
-      if (treePath === null) return;
-      openFile(treePath, prepareOpenTilePreviewInTabFocusTarget);
+      openFileFromTreeRow(event, "single");
     },
-    [openFile, prepareOpenTilePreviewInTabFocusTarget],
+    [openFileFromTreeRow],
   );
 
   const pinFileFromTreeRow = useCallback(
     (event: MouseEvent<HTMLElement>) => {
-      const treePath = extractPierreItemPathFromEvent(event);
-      if (treePath === null) return;
-      openFile(treePath, prepareOpenTileInTabFocusTarget);
+      openFileFromTreeRow(event, "double");
     },
-    [openFile, prepareOpenTileInTabFocusTarget],
+    [openFileFromTreeRow],
   );
 
   // Bridge Pierre's shadow-DOM rows into the canvas dnd-kit drag flow. The row
@@ -287,6 +285,7 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
         className="h-full min-h-0"
         model={model}
         onClick={previewFileFromTreeRow}
+        onAuxClick={onMiddleClick(previewFileFromTreeRow)}
         onDoubleClick={pinFileFromTreeRow}
         style={gitTreeStyle(
           model.getItemHeight(),

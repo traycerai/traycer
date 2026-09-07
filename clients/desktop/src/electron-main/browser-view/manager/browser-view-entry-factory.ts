@@ -1,10 +1,15 @@
 import type { Event, Input, RenderProcessGoneDetails, Result } from "electron";
 import type { BrowserViewStatus } from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../../app/logger";
+import { guestNavigationGuards } from "../browser-guest-navigation";
 import type {
   BrowserViewPopupWindow,
   ManagedBrowserView,
 } from "../browser-view-port";
+import type {
+  BrowserSessionProfile,
+  BrowserSessionProfileRequest,
+} from "../browser-session";
 import type { BrowserViewAnnotationHost } from "./browser-view-annotation-host";
 import type { BrowserViewChords } from "./browser-view-chords";
 import type {
@@ -22,7 +27,9 @@ import type { BrowserViewPopups } from "./browser-view-popups";
 import type { BrowserViewDebugSessions } from "./debug-session-for";
 
 interface BrowserViewEntryFactoryOptions {
-  readonly createView: () => ManagedBrowserView;
+  readonly createView: (
+    request: BrowserSessionProfileRequest,
+  ) => ManagedBrowserView;
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   readonly geometry: BrowserViewGeometry;
   readonly overlay: BrowserViewOverlay;
@@ -34,6 +41,7 @@ interface BrowserViewEntryFactoryOptions {
   readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: ManagedBrowserView["webContents"],
+    profile: BrowserSessionProfile,
   ) => void;
   readonly setStatus: (
     entry: BrowserViewEntry,
@@ -51,7 +59,9 @@ interface BrowserViewEntryFactoryOptions {
  * the coordinator only owns what a caller asks for.
  */
 export class BrowserViewEntryFactory {
-  private readonly createView: () => ManagedBrowserView;
+  private readonly createView: (
+    request: BrowserSessionProfileRequest,
+  ) => ManagedBrowserView;
   private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   private readonly geometry: BrowserViewGeometry;
   private readonly overlay: BrowserViewOverlay;
@@ -63,6 +73,7 @@ export class BrowserViewEntryFactory {
   private readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: ManagedBrowserView["webContents"],
+    profile: BrowserSessionProfile,
   ) => void;
   private readonly setStatus: (
     entry: BrowserViewEntry,
@@ -91,13 +102,20 @@ export class BrowserViewEntryFactory {
   create(
     requestedUrl: string,
     identity: BrowserViewNativeIdentity,
+    profile: BrowserSessionProfile,
   ): BrowserViewEntry {
-    const view = this.createView();
+    // The host names the jar on `createElectronTab`; an `isolated` session
+    // lands on its own per-session partition and shares cookies with nothing.
+    const view = this.createView({
+      profile,
+      sessionId: identity.key.sessionId,
+    });
     const entry: BrowserViewEntry = {
       surface: null,
       surfaceBindingId: null,
       guestKey: nativeGuestKey(identity.key),
       identity,
+      profile,
       view,
       listeners: {
         "before-input-event": (event: Event, input: Input): void => {
@@ -117,6 +135,11 @@ export class BrowserViewEntryFactory {
         "did-navigate": (_event: Event, url: string): void => {
           this.handleCommittedNavigation(entry, url);
         },
+        // The page-initiated half of the guest scheme gate (browser security
+        // review, root cause C). `navigate` in the manager covers what this
+        // process asks for; these cover what the page asks for on its own -
+        // a link, a scripted `location =`, a server redirect, a subframe.
+        ...guestNavigationGuards(),
         "did-start-navigation": (
           _event: Event,
           _url: string,
@@ -175,6 +198,7 @@ export class BrowserViewEntryFactory {
       overlaySnapshotStale: false,
       overlayAwaitingPaintAck: false,
       overlayParked: false,
+      overlayRestoreToken: null,
       visible: null,
       lastLoggedVisible: null,
       rendererResetPending: false,
@@ -213,7 +237,11 @@ export class BrowserViewEntryFactory {
     entry.currentUrl = url;
     entry.requestedUrl = url;
     entry.currentTitle = entry.view.webContents.getTitle();
-    this.observePrimaryProfileOrigin(url, entry.view.webContents);
+    this.observePrimaryProfileOrigin(
+      url,
+      entry.view.webContents,
+      entry.profile,
+    );
     entry.certificateError = null;
     this.overlay.invalidateSnapshot(entry, "navigation-committed");
     this.setStatus(entry, "ready", null);
@@ -234,7 +262,11 @@ export class BrowserViewEntryFactory {
     entry.currentUrl = url;
     entry.requestedUrl = url;
     entry.currentTitle = entry.view.webContents.getTitle();
-    this.observePrimaryProfileOrigin(url, entry.view.webContents);
+    this.observePrimaryProfileOrigin(
+      url,
+      entry.view.webContents,
+      entry.profile,
+    );
     this.annotations.end(entry, "navigation");
     this.overlay.invalidateSnapshot(entry, "in-page-navigation");
     this.emitStatus(entry);
@@ -260,10 +292,18 @@ export class BrowserViewEntryFactory {
     input: Input,
   ): void {
     if (input.type !== "keyDown") return;
+    // The guest seam runs BEFORE the macOS app-menu accelerator and is the
+    // only place in the chain that knows a browser tile has focus, so the
+    // whole focus-scoped input policy is decided here. `preventDefault` is
+    // what stops a menu equivalent (Cmd+W's "Close Tab") from also firing.
     const reserved = this.chords.match(input);
     if (reserved !== null) {
       event.preventDefault();
-      this.chords.forwardToHostWindow(entry, reserved);
+      // Every reserved chord is one-shot - holding Cmd+T at ~25 Hz would open
+      // (and split for) a tab per repeat - but the repeat is still CLAIMED
+      // above, or it walks straight into the menu equivalent while the first
+      // press's asynchronous close is still in flight.
+      if (!input.isAutoRepeat) this.chords.dispatch(entry.surface, reserved);
       return;
     }
     if (!(input.control || input.meta || input.shift || input.alt)) return;

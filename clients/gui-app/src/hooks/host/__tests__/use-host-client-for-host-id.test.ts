@@ -44,6 +44,10 @@ function getFollowingClient(): HostClient<HostRpcRegistry> {
 
 vi.mock("@/lib/host", () => ({
   useHostClient: getFollowingClient,
+  useHostBinding: () => ({
+    hostClient: getGlobalClient(),
+    hostId: null,
+  }),
   // `useHostClientForHostId` reads BOTH through the barrel: the spine for
   // the directory lookups, the effective host for the following branch.
   useHostRuntimeClient: getGlobalClient,
@@ -127,7 +131,7 @@ describe("useHostClientForHostId", () => {
     expect(result.current?.getActiveHostId()).toBe(mockLocalHostEntry.hostId);
   });
 
-  it("builds a transient client for a different hydrated host", () => {
+  it("builds an identity requester for a different hydrated host", () => {
     const { client: globalClient } = buildGlobalClient(() => [
       mockLocalHostEntry,
       TARGET_B,
@@ -139,6 +143,44 @@ describe("useHostClientForHostId", () => {
 
     expect(result.current).not.toBe(globalClient);
     expect(result.current?.getActiveHostId()).toBe("host-b");
+  });
+
+  it("keeps one identity requester across a booting row's endpoint transition", () => {
+    const booting: HostDirectoryEntry = {
+      ...TARGET_B,
+      websocketUrl: null,
+    };
+    let entries: readonly HostDirectoryEntry[] = [booting];
+    const { client: globalClient } = buildGlobalClient(() => entries);
+    globalClientRef.value = globalClient;
+
+    const { result } = renderHook(() =>
+      useHostClientForHostId(TARGET_B.hostId),
+    );
+    const requester = result.current;
+
+    expect(requester).not.toBeNull();
+    expect(requester?.getActiveHostId()).toBe(TARGET_B.hostId);
+    expect(requester?.getActiveHost()?.websocketUrl).toBeNull();
+
+    entries = [TARGET_B];
+
+    expect(result.current).toBe(requester);
+    expect(requester?.getActiveHost()?.websocketUrl).toBe(
+      TARGET_B.websocketUrl,
+    );
+  });
+
+  it("keeps an explicit requester while its directory row is absent", () => {
+    const { client: globalClient } = buildGlobalClient(() => []);
+    globalClientRef.value = globalClient;
+
+    const { result } = renderHook(() =>
+      useHostClientForHostId("host-nobody-knows"),
+    );
+
+    expect(result.current).not.toBeNull();
+    expect(result.current?.getActiveHostId()).toBeNull();
   });
 
   it("keeps an explicit requester pinned when the default host switches", async () => {

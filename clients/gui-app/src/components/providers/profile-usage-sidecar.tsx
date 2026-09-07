@@ -1,5 +1,7 @@
 import { useLayoutEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useComposedRefs } from "radix-ui/internal";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileUsageWindow } from "@/lib/rate-limits/profile-usage-projection";
 import { AccentDot } from "@/components/providers/accent-dot";
@@ -54,6 +56,17 @@ export function ProfileUsageSidecar(
 ): ReactNode {
   const { anchor, profile, entry, isHostReady } = props;
   const [sidecarNode, setSidecarNode] = useState<HTMLElement | null>(null);
+  // Portals its own opaque panel to `document.body` without going through a
+  // shadcn wrapper, so it registers itself with the occlusion coordinator -
+  // an unregistered overlay lets an intersecting `WebContentsView` composite
+  // on top of it. Registration is unconditional: while unpositioned the panel
+  // carries `invisible`, and the coordinator already skips a
+  // `visibility: hidden` element as unpainted.
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLElement>();
+  const composedSidecarRef = useComposedRefs(
+    setSidecarNode,
+    registerOverlayRef,
+  );
   const [position, setPosition] = useState<ProfileUsageSidecarPosition | null>(
     null,
   );
@@ -103,7 +116,7 @@ export function ProfileUsageSidecar(
   if (typeof document === "undefined") return null;
   return createPortal(
     <aside
-      ref={setSidecarNode}
+      ref={composedSidecarRef}
       aria-label={`Usage details for ${profile.label}`}
       aria-live="off"
       data-profile-usage-sidecar=""

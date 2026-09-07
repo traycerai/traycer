@@ -32,10 +32,6 @@ vi.mock(
   }),
 );
 
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({ isPending: false, mutate: vi.fn() }),
-}));
-
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: () => null,
   useOpenEpicId: () => "epic-1",

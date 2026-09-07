@@ -1,84 +1,69 @@
 import type { Cookie, CookiesSetDetails } from "electron";
 import { describe, expect, it, vi } from "vitest";
-import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/browser-view";
 import {
   BrowserPrimaryProfileSnapshotCoordinator,
+  cookieKeyId,
   captureBrowserPrimaryProfile,
-  seedBrowserViewCookies,
+  mergeObservedProfileCookies,
   type BrowserPrimaryProfileCaptureDependencies,
   type BrowserPrimaryProfileOriginSnapshot,
   type BrowserStorageCaptureWebContents,
 } from "../browser-storage-state";
 
-vi.mock("electron", () => ({
-  safeStorage: {
-    isEncryptionAvailable: () => true,
-    getSelectedStorageBackend: () => "unknown",
-  },
-}));
+/**
+ * `setStorageCookie` is what every host->jar write goes through, and it is the
+ * normalisation the whole ownership model rests on: the shell decides the
+ * `url`, the scope and the expiry, so the sender's attributes are re-derived
+ * rather than trusted. `mergeObservedProfileCookies` is its one exported
+ * caller since H05 collapsed the seed onto it, so the case lives here.
+ */
+describe("host-contributed cookie normalisation", () => {
+  it("derives the url and scope from the cookie rather than the sender", async () => {
+    const written: CookiesSetDetails[] = [];
+    const flushStore = vi.fn(() => Promise.resolve());
 
-const realState: BrowserCookieCryptoState = {
-  mode: "real",
-  persistence: "persistent",
-  reason: "os-backed",
-  storageBackend: null,
-  encryptionAvailable: true,
-};
-
-const degradedState: BrowserCookieCryptoState = {
-  mode: "degraded",
-  persistence: "ephemeral",
-  reason: "keychain-denied",
-  storageBackend: null,
-  encryptionAvailable: false,
-};
-
-describe("seedBrowserViewCookies", () => {
-  it("seeds supplied cookies without replacing unrelated cookies", async () => {
-    const unrelated: CookiesSetDetails = {
-      url: "https://unrelated.test/",
-      name: "unrelated",
-      value: "keep-me",
-      path: "/",
-      expirationDate: undefined,
-      httpOnly: false,
-      secure: true,
-      sameSite: "lax",
-    };
-    const storedCookies = new Map([[unrelated.name, unrelated]]);
-    const seededCookies: CookiesSetDetails[] = [];
-    const flushStore = vi.fn(async () => {});
-
-    await seedBrowserViewCookies(
+    const result = await mergeObservedProfileCookies(
+      [
+        {
+          name: "host-only",
+          value: "first",
+          domain: "example.test",
+          path: "/",
+          expires: -1,
+          httpOnly: false,
+          secure: false,
+          sameSite: "Lax",
+          partitionKey: null,
+        },
+        {
+          name: "domain-cookie",
+          value: "second",
+          domain: ".secure.test",
+          path: "/",
+          expires: 4_102_444_800,
+          httpOnly: false,
+          secure: true,
+          sameSite: "Lax",
+          partitionKey: null,
+        },
+      ],
       {
-        cookies: [
-          { ...storageCookie("host-only"), value: "first" },
-          {
-            ...storageCookie("domain-cookie"),
-            value: "second",
-            domain: ".secure.test",
-            secure: true,
-            expires: 4_102_444_800,
+        cookies: {
+          get: () => Promise.resolve([]),
+          set: (details: CookiesSetDetails) => {
+            written.push(details);
+            return Promise.resolve();
           },
-        ],
-        origins: [],
-      },
-      {
-        session: {
-          cookies: {
-            get: async (): Promise<Cookie[]> => [],
-            set: async (details: CookiesSetDetails): Promise<void> => {
-              seededCookies.push(details);
-              storedCookies.set(details.name, details);
-            },
-            flushStore,
-          },
+          flushStore,
         },
       },
     );
 
-    expect(seededCookies).toEqual([
+    expect(result).toEqual({ applied: 2, refused: [] });
+    expect(written).toEqual([
       {
+        // `http:` for an insecure cookie, `https:` for a secure one - the URL
+        // is built from the cookie, never sent by the host.
         url: "http://example.test/",
         name: "host-only",
         value: "first",
@@ -92,6 +77,9 @@ describe("seedBrowserViewCookies", () => {
         url: "https://secure.test/",
         name: "domain-cookie",
         value: "second",
+        // The leading dot survives only as the DOMAIN attribute; a host-only
+        // cookie carries none at all, which is what keeps the two forms
+        // distinguishable in the jar.
         domain: ".secure.test",
         path: "/",
         expirationDate: 4_102_444_800,
@@ -100,7 +88,6 @@ describe("seedBrowserViewCookies", () => {
         sameSite: "lax",
       },
     ]);
-    expect(storedCookies.get("unrelated")).toBe(unrelated);
     expect(flushStore).toHaveBeenCalledOnce();
   });
 
@@ -110,92 +97,152 @@ describe("seedBrowserViewCookies", () => {
     ["path syntax", "example.test/path"],
     ["whitespace", "example. test"],
     ["control character", "example.test\n"],
-    ["hostname normalization mismatch", "éxample.test"],
-  ])("rejects cookie domain with %s before writing", async (_label, domain) => {
-    const set = vi.fn();
+  ])(
+    "refuses a cookie domain with %s before writing",
+    async (_label, domain) => {
+      const set = vi.fn();
 
-    await expect(
-      seedBrowserViewCookies(
-        {
-          cookies: [{ ...storageCookie("sid"), domain }],
-          origins: [],
-        },
-        {
-          session: {
-            cookies: {
-              get: async () => [],
-              set,
-              flushStore: async () => {},
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow("domain");
-
-    expect(set).not.toHaveBeenCalled();
-  });
-
-  it("skips partitioned cookies rather than merging them into the unpartitioned jar", async () => {
-    const seeded: string[] = [];
-
-    await seedBrowserViewCookies(
-      {
-        cookies: [
+      const result = await mergeObservedProfileCookies(
+        [
           {
-            ...storageCookie("partitioned"),
-            partitionKey: "https://top-level.test",
+            name: "sid",
+            value: "sid-value",
+            domain,
+            path: "/",
+            expires: -1,
+            httpOnly: false,
+            secure: false,
+            sameSite: "Lax",
+            partitionKey: null,
           },
-          storageCookie("unpartitioned"),
         ],
-        origins: [],
-      },
-      {
-        session: {
+        {
           cookies: {
-            get: async () => [],
-            flushStore: async () => {},
-            set: async (details) => {
-              seeded.push(details.name ?? "");
-            },
+            get: () => Promise.resolve([]),
+            set,
+            flushStore: () => Promise.resolve(),
           },
+        },
+      );
+
+      // Counted, not thrown: this is untrusted remote input, and one
+      // unrepresentable cookie must not cost the rest of the frame.
+      expect(result.applied).toBe(0);
+      expect(result.refused).toEqual([{ domain, name: "sid", path: "/" }]);
+      expect(set).not.toHaveBeenCalled();
+    },
+  );
+
+  /**
+   * H11: the three spellings a real jar hands out that the old
+   * already-canonical check rejected outright. Each has to reach the jar under
+   * the host form Chromium itself uses, with the sender's DOMAIN attribute
+   * untouched - the wire form is what tells a host-only cookie from a domain
+   * cookie, and normalising it would change the cookie's scope.
+   */
+  it.each([
+    ["uppercase", "Example.COM", "https://example.com/", null],
+    ["trailing root dot", "example.com.", "https://example.com/", null],
+    [
+      // The DOMAIN attribute is canonicalised too (H11): Chromium files the
+      // row under its own normalisation, so a claim spelled the sender's way
+      // would never match the key the jar reads back.
+      "uppercase and trailing dot",
+      ".Example.COM.",
+      "https://example.com/",
+      ".example.com",
+    ],
+    ["unicode IDN", "m\u00fcnchen.de", "https://xn--mnchen-3ya.de/", null],
+    ["punycode IDN", "xn--mnchen-3ya.de", "https://xn--mnchen-3ya.de/", null],
+  ])(
+    "canonicalises a %s cookie domain instead of dropping it",
+    async (_label, domain, url, domainAttribute) => {
+      const written: CookiesSetDetails[] = [];
+
+      const result = await mergeObservedProfileCookies(
+        [
+          {
+            name: "sid",
+            value: "sid-value",
+            domain,
+            path: "/",
+            expires: -1,
+            httpOnly: false,
+            secure: true,
+            sameSite: "Lax",
+            partitionKey: null,
+          },
+        ],
+        {
+          cookies: {
+            get: () => Promise.resolve([]),
+            set: (details: CookiesSetDetails) => {
+              written.push(details);
+              return Promise.resolve();
+            },
+            flushStore: () => Promise.resolve(),
+          },
+        },
+      );
+
+      expect(result).toEqual({ applied: 1, refused: [] });
+      expect(written).toHaveLength(1);
+      expect(written[0]?.url).toBe(url);
+      expect(written[0]?.domain ?? null).toBe(domainAttribute);
+    },
+  );
+
+  it("V-18: refuses a partitioned (CHIPS) cookie, never writing it to the unpartitioned jar", async () => {
+    // RULE: isUnpartitionedCookie refuses any cookie with a non-null
+    // partitionKey before it reaches cookies.set - a host that names a
+    // partition must not have that cookie land in the desktop's ordinary,
+    // unpartitioned jar. Its unpartitioned sibling in the same batch must
+    // still be applied.
+    const written: CookiesSetDetails[] = [];
+
+    const result = await mergeObservedProfileCookies(
+      [
+        {
+          name: "partitioned",
+          value: "chips-value",
+          domain: "example.test",
+          path: "/",
+          expires: -1,
+          httpOnly: false,
+          secure: true,
+          sameSite: "Lax",
+          partitionKey: "https://top.test",
+        },
+        {
+          name: "unpartitioned",
+          value: "ordinary-value",
+          domain: "example.test",
+          path: "/",
+          expires: -1,
+          httpOnly: false,
+          secure: true,
+          sameSite: "Lax",
+          partitionKey: null,
+        },
+      ],
+      {
+        cookies: {
+          get: () => Promise.resolve([]),
+          set: (details: CookiesSetDetails) => {
+            written.push(details);
+            return Promise.resolve();
+          },
+          flushStore: () => Promise.resolve(),
         },
       },
     );
 
-    expect(seeded).toEqual(["unpartitioned"]);
-  });
-
-  it("writes sequentially and stops on a cookie-store failure", async () => {
-    const written: string[] = [];
-
-    await expect(
-      seedBrowserViewCookies(
-        {
-          cookies: [
-            storageCookie("first"),
-            storageCookie("second"),
-            storageCookie("third"),
-          ],
-          origins: [],
-        },
-        {
-          session: {
-            cookies: {
-              get: async () => [],
-              flushStore: async () => {},
-              set: async (details) => {
-                written.push(details.name ?? "");
-                if (details.name === "second") {
-                  throw new Error("set failed for second");
-                }
-              },
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow("set failed for second");
-
-    expect(written).toEqual(["first", "second"]);
+    expect(result.applied).toBe(1);
+    expect(result.refused).toEqual([
+      { domain: "example.test", name: "partitioned", path: "/" },
+    ]);
+    expect(written).toHaveLength(1);
+    expect(written[0]?.name).toBe("unpartitioned");
   });
 });
 
@@ -215,7 +262,7 @@ describe("captureBrowserPrimaryProfile", () => {
 
     const result = await captureBrowserPrimaryProfile(
       origins,
-      primaryCaptureDependencies(realState, cookieGetFilters, [
+      primaryCaptureDependencies(true, cookieGetFilters, [
         {
           name: "host-only",
           value: "cookie",
@@ -275,7 +322,7 @@ describe("captureBrowserPrimaryProfile", () => {
     });
   });
 
-  it("short-circuits when cookie persistence is unavailable", async () => {
+  it("short-circuits when saved logins is turned off", async () => {
     const getSession = vi.fn();
     const result = await captureBrowserPrimaryProfile(
       [
@@ -285,7 +332,7 @@ describe("captureBrowserPrimaryProfile", () => {
         },
       ],
       {
-        readCryptoState: () => degradedState,
+        readSaveLogins: () => false,
         getSession,
       },
     );
@@ -293,7 +340,7 @@ describe("captureBrowserPrimaryProfile", () => {
     expect(result).toEqual({
       status: "unavailable",
       storageState: null,
-      reason: "keychain-denied",
+      reason: "saved-logins-off",
     });
     expect(getSession).not.toHaveBeenCalled();
   });
@@ -393,6 +440,99 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
         "https://seeded.example",
       ],
     ]);
+  });
+
+  it("forgets remembered origins on reset, including an observation still in flight", async () => {
+    let resolveInFlight: (
+      snapshot: BrowserPrimaryProfileOriginSnapshot,
+    ) => void = () => undefined;
+    const coordinator = new BrowserPrimaryProfileSnapshotCoordinator(
+      (origins) =>
+        Promise.resolve({
+          status: "captured",
+          storageState: {
+            cookies: [],
+            origins: origins.map((origin) => ({
+              origin: origin.origin,
+              localStorage: [...origin.localStorage],
+            })),
+          },
+          reason: null,
+        }),
+      (origin) =>
+        origin === "https://settled.example"
+          ? Promise.resolve({
+              origin,
+              localStorage: [{ name: "token", value: "kept" }],
+            })
+          : new Promise((resolve) => {
+              resolveInFlight = resolve;
+            }),
+    );
+    const webContents = {
+      getURL: () => "https://unused.example/",
+      executeJavaScript: () => Promise.resolve([]),
+    };
+    coordinator.observe("https://settled.example/inbox", webContents);
+    coordinator.observe("https://in-flight.example/inbox", webContents);
+    await Promise.resolve();
+    expect(coordinator.rememberedOrigins()).toHaveLength(1);
+
+    coordinator.reset();
+    // Read from the jar the forget is clearing: landing after the reset would
+    // re-seed a recreated tile with the localStorage just forgotten.
+    resolveInFlight({
+      origin: "https://in-flight.example",
+      localStorage: [{ name: "token", value: "stale" }],
+    });
+    await coordinator.capture();
+
+    expect(coordinator.rememberedOrigins()).toEqual([]);
+  });
+
+  it("clearableOrigins names an origin whose read is still in flight", async () => {
+    let resolveInFlight: (
+      snapshot: BrowserPrimaryProfileOriginSnapshot,
+    ) => void = () => undefined;
+    const { coordinator } = createTestCoordinator(
+      () =>
+        new Promise((resolve) => {
+          resolveInFlight = resolve;
+        }),
+    );
+    const webContents = {
+      getURL: () => "https://unused.example/",
+      executeJavaScript: () => Promise.resolve([]),
+    };
+
+    coordinator.observe("https://pending.example/inbox", webContents);
+
+    // The read has not settled yet: rememberedOrigins (what a CAPTURE draws
+    // on) knows nothing about it, but clearableOrigins (what a site clear can
+    // NAME) does - otherwise a clear that only invalidated the read would
+    // leave the tile's live localStorage in place to meet the imported
+    // cookies on the next reload.
+    expect(coordinator.clearableOrigins()).toEqual(["https://pending.example"]);
+    expect(coordinator.rememberedOrigins()).toEqual([]);
+
+    resolveInFlight({
+      origin: "https://pending.example",
+      localStorage: [{ name: "token", value: "kept" }],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Once the read settles it moves into the remembered tier, and
+    // clearableOrigins still names it (now via rememberedOrigins) rather than
+    // double-counting it as still pending.
+    expect(coordinator.rememberedOrigins()).toEqual([
+      {
+        origin: "https://pending.example",
+        localStorage: [{ name: "token", value: "kept" }],
+      },
+    ]);
+    expect(coordinator.clearableOrigins()).toEqual(["https://pending.example"]);
   });
 
   it("keeps a demoted origin's fresh value when a LATER tab re-seeds the same jar", async () => {
@@ -630,7 +770,7 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
         captureBrowserPrimaryProfile(
           origins,
           primaryCaptureDependencies(
-            realState,
+            true,
             [],
             [
               {
@@ -675,37 +815,13 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
   });
 });
 
-function storageCookie(name: string): {
-  readonly name: string;
-  readonly value: string;
-  readonly domain: string;
-  readonly path: string;
-  readonly expires: number;
-  readonly httpOnly: boolean;
-  readonly secure: boolean;
-  readonly sameSite: "Lax";
-  readonly partitionKey: null;
-} {
-  return {
-    name,
-    value: `${name}-value`,
-    domain: "example.test",
-    path: "/",
-    expires: -1,
-    httpOnly: false,
-    secure: false,
-    sameSite: "Lax",
-    partitionKey: null,
-  };
-}
-
 function primaryCaptureDependencies(
-  cryptoState: BrowserCookieCryptoState,
+  saveLogins: boolean,
   cookieGetFilters: Array<{ readonly url?: string }>,
   cookies: Cookie[],
 ): BrowserPrimaryProfileCaptureDependencies {
   return {
-    readCryptoState: () => cryptoState,
+    readSaveLogins: () => saveLogins,
     getSession: () => ({
       cookies: {
         get: (filter) => {
@@ -718,3 +834,34 @@ function primaryCaptureDependencies(
     }),
   };
 }
+
+/**
+ * H11: the ownership ledger's key is minted from three sources that do not
+ * agree on spelling - the jar read, the applier's claim off the wire, and the
+ * observer's release - so the id has to canonicalise or a claim outlives every
+ * release and the name stays desktop-owned forever.
+ */
+describe("cookieKeyId canonicalisation", () => {
+  it("collapses case, a trailing root dot and IDN spelling onto one id", () => {
+    const canonical = cookieKeyId({
+      domain: ".example.com",
+      name: "sid",
+      path: "/",
+    });
+    for (const domain of [".Example.COM.", ".example.com.", ".EXAMPLE.com"]) {
+      expect(cookieKeyId({ domain, name: "sid", path: "/" })).toBe(canonical);
+    }
+    expect(
+      cookieKeyId({ domain: "m\u00fcnchen.de", name: "sid", path: "/" }),
+    ).toBe(
+      cookieKeyId({ domain: "xn--mnchen-3ya.de", name: "sid", path: "/" }),
+    );
+  });
+
+  it("keeps a host-only cookie distinct from the domain cookie of the same name", () => {
+    // Not a spelling: RFC 6265's leading dot is two different rows in the jar.
+    expect(
+      cookieKeyId({ domain: "example.com", name: "sid", path: "/" }),
+    ).not.toBe(cookieKeyId({ domain: ".example.com", name: "sid", path: "/" }));
+  });
+});

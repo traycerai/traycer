@@ -242,7 +242,7 @@ export function useHostQueryWithResponseMap<
       // collapsed to a boolean up front - or a caller's dynamic condition is
       // silently replaced by "always true" the moment a client is bound.
       enabled: (query) => {
-        if (client === null || !readiness.isReady) return false;
+        if (client === null || !readiness.canExecute) return false;
         const callerEnabled = args.options?.enabled;
         return typeof callerEnabled === "function"
           ? callerEnabled(query)

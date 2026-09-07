@@ -69,13 +69,19 @@ vi.mock("@/hooks/composer/use-github-mention-search", () => ({
 vi.mock("@/lib/relative-time", () => ({ useSampledNow: () => 0 }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
-  useReactiveHostReadiness: () => ({ hostId: "host-1" }),
+  useReactiveHostReadiness: () => ({
+    hostId: "host-1",
+    isReady: true,
+    hasRpcEndpoint: true,
+    canExecute: true,
+  }),
 }));
 
 /** Mutable: method support is reactive, and that is the point of one test. */
 const support = vi.hoisted(() => ({ github: true }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSchemaVersion: () => null,
   useHostSupportsMethod: () => support.github,
 }));
 

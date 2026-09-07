@@ -1,5 +1,6 @@
 import { ChatUsageDialog } from "@/components/chat/chat-usage-dialog";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
+import { LoginImportAnnouncementController } from "@/components/layout/bridges/login-import-announcement-controller";
 import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
 import { HostControllerStatusListener } from "@/components/layout/bridges/host-controller-status-listener";
 import { LinkLoginDeepLinkBridge } from "@/components/layout/bridges/link-login-deep-link-bridge";
@@ -26,6 +27,7 @@ import {
 import { queryClient } from "@/lib/query-client";
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { AuthSessionExpiredToastBridge } from "@/providers/auth-session-expired-toast-bridge";
+import { HostTrustAlertBridge } from "@/providers/host-trust-alert-bridge";
 import { CommandPaletteProvider } from "@/providers/command-palette-provider";
 import { HostCredentialProvisionProvider } from "@/providers/host-credential-provision-provider";
 import { ComposerRunSettingsPersistLifecycleBridge } from "@/providers/composer-run-settings-persist-lifecycle-bridge";
@@ -264,6 +266,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
       <SupportContextRegistryBridge router={props.router} />
       <WindowsBridgeAuthSessionBridge>
         <AuthSessionExpiredToastBridge />
+        <HostTrustAlertBridge />
         <HostCredentialProvisionProvider>
           <EpicSessionLifecycleBridge>
             <ComposerRunSettingsPersistLifecycleBridge>
@@ -330,6 +333,7 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <RunnerHostBridges />
       <HostControllerStatusListener />
       <AppUpdateToastController />
+      <LoginImportAnnouncementController />
       <LinkLoginDeepLinkBridge />
       <WorktreeDeleteProgressToastBridge />
       <SessionImportProgressToastBridge />

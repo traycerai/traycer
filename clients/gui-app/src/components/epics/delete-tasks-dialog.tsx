@@ -18,6 +18,7 @@ interface DeleteTasksDialogProps {
   readonly title: string;
   readonly description: string;
   readonly isPending: boolean;
+  readonly isCheckingWorktrees: boolean;
   readonly onConfirm: () => void;
   /**
    * Worktrees the deleted Task(s) alone reference. Empty (no candidates, or a
@@ -44,6 +45,7 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
     title,
     description,
     isPending,
+    isCheckingWorktrees,
     onConfirm,
     candidates,
     isPathChecked,
@@ -124,11 +126,11 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
             variant="destructive"
             size="sm"
             className="w-full sm:w-auto"
-            disabled={isPending}
+            disabled={isPending || isCheckingWorktrees}
             onClick={onConfirm}
             data-testid="delete-tasks-confirm"
           >
-            {isPending ? (
+            {isPending || isCheckingWorktrees ? (
               <AgentSpinningDots
                 className={undefined}
                 testId={undefined}

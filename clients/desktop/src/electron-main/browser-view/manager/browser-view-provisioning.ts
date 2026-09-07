@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type {
-  BrowserViewEnsureTab,
-  BrowserViewNativeTabCapability,
-} from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserViewNativeTabCapability } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserStorageState } from "@traycer/protocol/host/browser/contracts";
 import { describeLogError, log } from "../../app/logger";
-import type { ManagedBrowserView } from "../browser-view-port";
+import type { BrowserSessionProfile } from "../browser-session";
+import type {
+  BrowserViewEnsureTab,
+  ManagedBrowserView,
+} from "../browser-view-port";
 import { browserLocalStorageSeedScript } from "../storage/browser-storage-state";
 import type {
   BrowserViewEntry,
@@ -26,11 +27,12 @@ interface BrowserViewProvisioningOptions {
   readonly createEntry: (
     requestedUrl: string,
     identity: BrowserViewNativeIdentity,
+    profile: BrowserSessionProfile,
   ) => BrowserViewEntry;
   readonly seedStorageState: (
-    storageState: BrowserStorageState | null,
+    input: BrowserViewEnsureTab,
     webContents: ManagedBrowserView["webContents"],
-  ) => Promise<void>;
+  ) => Promise<BrowserStorageState | null>;
   readonly closeEntry: (entry: BrowserViewEntry) => Promise<void>;
   readonly navigate: (entry: BrowserViewEntry, url: string) => Promise<void>;
   readonly emitStatus: (entry: BrowserViewEntry) => void;
@@ -49,11 +51,12 @@ export class BrowserViewProvisioning {
   private readonly createEntry: (
     requestedUrl: string,
     identity: BrowserViewNativeIdentity,
+    profile: BrowserSessionProfile,
   ) => BrowserViewEntry;
   private readonly seedStorageState: (
-    storageState: BrowserStorageState | null,
+    input: BrowserViewEnsureTab,
     webContents: ManagedBrowserView["webContents"],
-  ) => Promise<void>;
+  ) => Promise<BrowserStorageState | null>;
   private readonly closeEntry: (entry: BrowserViewEntry) => Promise<void>;
   private readonly navigate: (
     entry: BrowserViewEntry,
@@ -101,7 +104,7 @@ export class BrowserViewProvisioning {
       lifecycle,
     };
     this.windows.ensureResetListener(windowId);
-    const entry = this.createEntry(input.requestedUrl, identity);
+    const entry = this.createEntry(input.requestedUrl, identity, input.profile);
     logEnsureStage(input, startedAt, "entry_created", "ok", null);
     void this.settleNativeTabInitialization(entry, input, startedAt);
     return lifecycle.provisioned;
@@ -204,8 +207,11 @@ export class BrowserViewProvisioning {
     input: BrowserViewEnsureTab,
     startedAt: number,
   ): Promise<BrowserViewNativeTabCapability> {
-    await this.seedStorageState(input.seedStorageState, entry.view.webContents);
-    const seedScript = browserLocalStorageSeedScript(input.seedStorageState);
+    // The script is built from what the seed path RETURNED, never from the
+    // host's raw frame: the localStorage half is narrowed to the tab's own
+    // site there, and refused outright when the cookie half was refused.
+    const seeded = await this.seedStorageState(input, entry.view.webContents);
+    const seedScript = browserLocalStorageSeedScript(seeded);
     await this.activateNativeTabTarget(entry, input, startedAt);
     const debugSession = this.debugSessions.ensure(entry);
     const seedScriptId =

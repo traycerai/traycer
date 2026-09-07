@@ -31,16 +31,24 @@ import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
-const attachmentMocks = vi.hoisted(() => ({
-  fetcher: vi.fn((_hash: string, _signal: AbortSignal) =>
+const attachmentMocks = vi.hoisted(() => {
+  const fetch = vi.fn((_hash: string, _signal: AbortSignal) =>
     Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), mediaType: null }),
-  ),
-  hasBytes: vi.fn(() => true),
-  readChatBytes: vi.fn(
-    (_hash: string): Promise<Uint8Array<ArrayBuffer> | null> =>
-      Promise.resolve(new Uint8Array([1, 2, 3])),
-  ),
-}));
+  );
+  return {
+    fetch,
+    // Built ONCE, not per call. These stand in for hooks that memoize, and
+    // the blob-url effect takes the fetcher as a dependency - a factory
+    // returning a fresh object each render re-runs that effect forever.
+    epicFetcher: { scopeKey: "test-epic-scope", fetch },
+    chatFetcher: { scopeKey: "test-chat-scope", fetch },
+    hasBytes: vi.fn(() => true),
+    readChatBytes: vi.fn(
+      (_hash: string): Promise<Uint8Array<ArrayBuffer> | null> =>
+        Promise.resolve(new Uint8Array([1, 2, 3])),
+    ),
+  };
+});
 const composerPickerMocks = vi.hoisted(() => ({
   useComposerPickerItems: vi.fn(),
 }));
@@ -131,7 +139,7 @@ vi.mock(
     const actual = await importOriginal();
     return {
       ...actual,
-      useEpicImageFetcher: () => attachmentMocks.fetcher,
+      useEpicImageFetcher: () => attachmentMocks.epicFetcher,
       useEpicAttachmentBytesPresence: () => attachmentMocks.hasBytes,
     };
   },
@@ -143,7 +151,7 @@ vi.mock(
     const actual = await importOriginal();
     return {
       ...actual,
-      useChatImageFetcher: () => attachmentMocks.fetcher,
+      useChatImageFetcher: () => attachmentMocks.chatFetcher,
       useChatAttachmentByteReader: () => attachmentMocks.readChatBytes,
     };
   },
@@ -270,8 +278,8 @@ describe("<UserMessageBody /> agent messages", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
-    attachmentMocks.fetcher.mockReset();
-    attachmentMocks.fetcher.mockImplementation((_hash, _signal) =>
+    attachmentMocks.fetch.mockReset();
+    attachmentMocks.fetch.mockImplementation((_hash, _signal) =>
       Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), mediaType: null }),
     );
     attachmentMocks.hasBytes.mockReset();

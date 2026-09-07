@@ -65,6 +65,7 @@ function stoppedCommand(commandId: string): ManagedCommand {
     cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
     status: { state: "stopped", stoppedAtMs: 5 },
     chatId: "chat-1",
+    relaunchOnHostRestart: false,
     createdAtMs: 1,
     updatedAtMs: 5,
   };

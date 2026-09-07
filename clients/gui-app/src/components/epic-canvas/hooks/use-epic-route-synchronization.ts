@@ -14,6 +14,10 @@ import {
 } from "@/stores/epics/canvas/store";
 import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import {
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
   cloudChatListAuthorizesRecordSweep,
@@ -32,6 +36,7 @@ import { resolveAutoOpenTarget } from "@/lib/epic-auto-open";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import { getHistoryController } from "@/lib/persistent-history";
+import { applyRouteBookkeeping } from "@/lib/tab-navigation/route-bookkeeping";
 import {
   areNestedFocusTargetsEqual,
   buildNestedFocusSearchPatch,
@@ -44,6 +49,8 @@ import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-foc
 import { getNestedRouteApplicationDeferralMs } from "@/lib/nested-focus-navigation-intent";
 import { shouldYieldPaneActivationRouteFocus } from "@/components/epic-canvas/pane-activation";
 import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import { isCurrentEpicTabRoute } from "@/lib/epic-nested-focus-navigation";
 
 const PRIMARY_CHAT_COMPOSER_SELECTOR =
   "[data-chat-composer] [data-composer-editor]";
@@ -102,7 +109,6 @@ export function useEpicRouteSynchronization(
   });
   const currentTab = useEpicTab(tabId);
   const renameTab = useEpicCanvasStore((s) => s.renameTab);
-  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
   const applyNestedRouteFocus = useEpicCanvasStore(
     (s) => s.applyNestedRouteFocus,
   );
@@ -386,13 +392,44 @@ export function useEpicRouteSynchronization(
     if (activeArtifactId === target.id) {
       return;
     }
-    openTileInTab(tabId, {
-      id: target.id,
-      instanceId: uuidv4(),
-      type: target.type,
-      name: target.name,
-      hostId: target.hostId,
-    });
+    // Route landing uses the same gesture mapping as a link click (C11), but
+    // it is the LANDING itself: the focus params it derives belong on the
+    // entry the user already navigated to, so the commit REPLACES rather than
+    // pushing a second entry they would have to press Back through twice.
+    openTileWithNavigation(
+      tileIntent(
+        {
+          id: target.id,
+          instanceId: uuidv4(),
+          type: target.type,
+          name: target.name,
+          hostId: target.hostId,
+        },
+        { tabId },
+        "single",
+        "deep_link",
+      ),
+      (targetEpicId, targetTabId, prepare) => {
+        const focusTarget = prepare();
+        if (focusTarget === null) return null;
+        if (
+          !isCurrentEpicTabRoute(
+            router.state.location.pathname,
+            targetEpicId,
+            targetTabId,
+          )
+        ) {
+          return focusTarget;
+        }
+        replaceNestedFocusRoute(
+          navigate,
+          { epicId: targetEpicId, tabId: targetTabId },
+          focusTarget,
+        );
+        return focusTarget;
+      },
+      MANUAL_TILE_OPEN,
+    );
   }, [
     snapshotLoaded,
     records,
@@ -400,7 +437,8 @@ export function useEpicRouteSynchronization(
     focusedAt,
     persistedFocus,
     hasRestoredCanvas,
-    openTileInTab,
+    navigate,
+    router,
     activeArtifactId,
     epicId,
     tabId,
@@ -511,24 +549,44 @@ export function useEpicRouteSynchronization(
   ]);
 }
 
+/**
+ * Marked as route bookkeeping: this replace records view state onto the route
+ * its tab is already showing, so the navigation controller must never read a
+ * late-landing one as the user navigating back to this epic.
+ *
+ * Deliberately NOT de-duplicated behind an "at most one in flight" guard.
+ * Suppressing a replace while another is in flight leaves the URL naming the
+ * EARLIER focus target, and this effect's own branch selection is driven by
+ * that URL: once it carries a resolvable target, the route drives the canvas
+ * (`applyNestedRouteFocus`) instead of the canvas driving the route, so a
+ * suppressed update is not merely delayed - it is inverted, pulling tile
+ * focus back to where it had already moved from. Letting every update through
+ * keeps the LAST one authoritative, which is the whole contract here.
+ */
 function replaceNestedFocusRoute(
   navigate: NavigateFn,
   tab: { readonly epicId: string; readonly tabId: string },
   target: NestedFocusTarget | null,
 ): void {
-  void navigate({
-    to: "/epics/$epicId/$tabId",
-    params: { epicId: tab.epicId, tabId: tab.tabId },
-    search: (prev) => ({
-      ...prev,
-      focusedAt: prev.focusedAt,
-      focusArtifactId: prev.focusArtifactId,
-      focusThreadId: prev.focusThreadId,
-      migrationSource: prev.migrationSource,
-      ...buildNestedFocusSearchPatch(target),
+  navigate(
+    applyRouteBookkeeping({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: tab.epicId, tabId: tab.tabId },
+      search: (prev) => ({
+        ...prev,
+        focusedAt: prev.focusedAt,
+        focusArtifactId: prev.focusArtifactId,
+        focusThreadId: prev.focusThreadId,
+        migrationSource: prev.migrationSource,
+        ...buildNestedFocusSearchPatch(target),
+      }),
+      replace: true,
     }),
-    replace: true,
-  });
+    // Bookkeeping is best-effort by nature: a rejected commit (a blocked or
+    // superseded navigation) leaves the URL without this focus target, and the
+    // next canvas change re-derives it. Swallow it rather than surfacing an
+    // unhandled rejection for something no caller is awaiting.
+  ).catch(() => undefined);
 }
 
 /**

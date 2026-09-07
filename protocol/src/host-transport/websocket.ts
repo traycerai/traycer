@@ -9,6 +9,8 @@
  * buffering, fatal-error mapping) stays inside `WsRpcClient`.
  */
 
+import type { DialPriority } from "./dial-priority";
+
 export interface WebSocketOpenEvent {
   readonly type: "open";
 }
@@ -49,7 +51,13 @@ export interface WebSocketLike {
  * `WsRpcClient.request` call obtains exactly one connection through this
  * factory and discards it on completion - no long-lived socket state crosses
  * requests.
+ *
+ * `priority` says whether anything rendered is waiting on this call, so the
+ * production factory's dial gate can let it past the boot flood
+ * (`ws-dial-gate.ts`). It is REQUIRED rather than defaulted: the URL carries
+ * no method, this is the last layer that still knows one, and a default would
+ * silently classify every future call site.
  */
 export interface IWebSocketFactory {
-  create(url: string): WebSocketLike;
+  create(url: string, priority: DialPriority): WebSocketLike;
 }

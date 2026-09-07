@@ -130,6 +130,7 @@ interface QueryActivity {
 interface MockHostClient {
   readonly id: string;
   getActiveHostId(): string | null;
+  getActiveHost(): { readonly websocketUrl: string | null } | null;
 }
 
 function mockHostClientKey(client: MockHostClient): string {
@@ -161,6 +162,19 @@ const queryMock = vi.hoisted(() => ({
   modelsByClient: new Map<string, Map<string, ReadonlyArray<ModelOption>>>(),
   catalogHarnessesByClient: new Map<string, CatalogHarness[]>(),
   unresolvedHostIds: new Set<string>(),
+  endpointAbsentHostIds: new Set<string>(),
+  reachabilityByHost: new Map<
+    string,
+    {
+      readonly status:
+        | "checking"
+        | "reachable"
+        | "unreachable"
+        | "host-starting";
+      readonly hostLabel: string;
+      readonly unavailability: "offline" | "plan-restricted" | null;
+    }
+  >(),
   concreteDefaultHostId: null as string | null,
   cloneCatalogOnRead: false,
   calls: {
@@ -300,6 +314,39 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
       id: hostId ?? "default",
       getActiveHostId: () =>
         hostId ?? queryMock.concreteDefaultHostId ?? "default",
+      getActiveHost: () => ({
+        websocketUrl: queryMock.endpointAbsentHostIds.has(hostId ?? "default")
+          ? null
+          : "ws://127.0.0.1:59998/stream",
+      }),
+    };
+  },
+}));
+
+vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
+  useReactiveHostReadiness: (client: MockHostClient | null) => {
+    const hostId = client?.getActiveHostId() ?? null;
+    const hasRpcEndpoint =
+      (client?.getActiveHost()?.websocketUrl ?? null) !== null;
+    return {
+      hostId,
+      requestContextUserId: "user-1",
+      isReady: hostId !== null,
+      hasRpcEndpoint,
+      canExecute: hostId !== null && hasRpcEndpoint,
+    };
+  },
+}));
+
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: (hostId: string) => {
+    const reachability = queryMock.reachabilityByHost.get(hostId);
+    return {
+      status: reachability?.status ?? "reachable",
+      hostLabel: reachability?.hostLabel ?? hostId,
+      unavailability: reachability?.unavailability ?? null,
+      basis: "directory",
+      hostKind: "local",
     };
   },
 }));
@@ -598,7 +645,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     return {
       harnesses: activity.enabled ? harnesses : [],
       harnessesLoading: activity.enabled && queryMock.catalogHarnessesLoading,
-      harnessesError: null,
+      harnessesError: activity.enabled ? queryMock.harnessesError : null,
       modelsLoading: activity.enabled && queryMock.modelsLoading,
     };
   },
@@ -1073,6 +1120,8 @@ describe("<HarnessModelPicker />", () => {
     queryMock.modelsByClient = new Map();
     queryMock.catalogHarnessesByClient = new Map();
     queryMock.unresolvedHostIds = new Set();
+    queryMock.endpointAbsentHostIds = new Set();
+    queryMock.reachabilityByHost = new Map();
     queryMock.concreteDefaultHostId = null;
     queryMock.cloneCatalogOnRead = false;
     queryMock.calls.harnesses = [];
@@ -1689,6 +1738,67 @@ describe("<HarnessModelPicker />", () => {
     );
 
     await waitFor(() => expect(queryMock.calls.refresh.at(-1)).toBe("default"));
+  });
+
+  it("disables rail refresh with the host-starting reason while the RPC endpoint is absent", async () => {
+    queryMock.endpointAbsentHostIds.add("booting-host");
+    renderPicker({ createProfileHostId: "booting-host" });
+
+    await openPicker();
+    const refreshButton = screen.getByRole("button", {
+      name: "Refresh providers & models — booting-host is starting",
+    });
+    expect(refreshButton.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(refreshButton);
+    expect(queryMock.calls.refresh).not.toContain("booting-host");
+  });
+
+  it("surfaces a confirmed remote outage before a provider-catalog error", async () => {
+    queryMock.harnesses = [];
+    queryMock.catalogHarnesses = [];
+    queryMock.selectedModelsByHarness = new Map();
+    queryMock.reachabilityByHost.set("remote-offline", {
+      status: "unreachable",
+      hostLabel: "Remote Mac",
+      unavailability: "offline",
+    });
+    renderPicker({ createProfileHostId: "remote-offline" });
+
+    await openPickerByTriggerName(/^Select model/);
+    screen.getByRole("option", { name: "Remote Mac is offline" });
+    const refreshButton = screen.getByRole("button", {
+      name: "Refresh providers & models — Remote Mac is offline",
+    });
+    expect(refreshButton.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.queryByRole("option", { name: "Couldn't load providers" }),
+    ).toBeNull();
+  });
+
+  it("surfaces a remote plan restriction before a provider-catalog error", async () => {
+    queryMock.harnesses = [];
+    queryMock.catalogHarnesses = [];
+    queryMock.selectedModelsByHarness = new Map();
+    queryMock.reachabilityByHost.set("remote-plan-restricted", {
+      status: "unreachable",
+      hostLabel: "Remote Mac",
+      unavailability: "plan-restricted",
+    });
+    renderPicker({ createProfileHostId: "remote-plan-restricted" });
+
+    await openPickerByTriggerName(/^Select model/);
+
+    screen.getByRole("option", {
+      name: "Remote Mac isn't available on your plan",
+    });
+    const refreshButton = screen.getByRole("button", {
+      name: "Refresh providers & models — Remote Mac isn't available on your plan",
+    });
+    expect(refreshButton.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.queryByRole("option", { name: "Couldn't load providers" }),
+    ).toBeNull();
   });
 
   it("hides unavailable providers that are not recoverable from the rail", async () => {

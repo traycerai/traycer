@@ -16,22 +16,24 @@ import type { OpenableArtifactLink } from "@/editor-core";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { useArtifactFolderChain } from "@/lib/epic-selectors";
 import { fetchResolveArtifactByPath } from "@/lib/host/resolve-artifact-by-path";
 import { fetchWorkspaceFileExists } from "@/lib/host/probe-workspace-file-exists";
+import type { LinkClickEvent } from "@/lib/links/open-link";
+import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import { isAbsolutePath } from "@/lib/path/cross-platform-path";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { artifactEpicIdFromLinkPath } from "@/markdown/links/artifact-link-path";
 import type { MarkdownFileLink } from "@/markdown/links/markdown-link-context";
 import { resolveArtifactRelativeLinkPath } from "@/markdown/links/resolve-artifact-relative-link";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 export interface ArtifactLinkOpener {
-  readonly openLink: (link: OpenableArtifactLink) => void;
-  readonly isExternalPending: boolean;
+  readonly openLink: (
+    link: OpenableArtifactLink,
+    event: LinkClickEvent,
+  ) => void;
 }
 
 /**
@@ -184,28 +186,22 @@ export function useArtifactLinkOpener(args: {
       ),
     );
   }, [worktrees.data]);
-  const tileNavigation = useEpicTileNavigation();
-  const previewTileInTab = useCallback(
-    (tabId: string, node: EpicCanvasTileRef): void => {
-      tileNavigation.openTilePreviewInTab(tabId, node);
-    },
-    [tileNavigation],
-  );
+  const { openTile } = useEpicTileNavigation();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const epicHandle = useOpenEpicHandle();
-  const { mutate: openExternalLink, isPending: isExternalPending } =
-    useRunnerOpenExternalLink();
+  // `isPending` guards the egress the way the anchors do (R10): each call
+  // fires a fresh bridge request, so a double click would open two OS tabs.
+  const { isPending: urlOpenPending, openLink: openUrl } =
+    useOpenLinkWithPending();
   const pendingProjectedOpenCancelRef = useRef<(() => void) | null>(null);
   const disposedRef = useRef(false);
   const clickTokenRef = useRef(0);
-  const externalOpenInFlightRef = useRef(false);
 
   useEffect(() => {
     disposedRef.current = false;
     return () => {
       disposedRef.current = true;
-      externalOpenInFlightRef.current = false;
       pendingProjectedOpenCancelRef.current?.();
       pendingProjectedOpenCancelRef.current = null;
     };
@@ -231,7 +227,7 @@ export function useArtifactLinkOpener(args: {
       client: tabHostClient,
       workspaceClient: tabHostClient,
       navigate,
-      previewTileInTab,
+      openTile,
     };
   }, [
     activeHostId,
@@ -239,7 +235,7 @@ export function useArtifactLinkOpener(args: {
     args.viewTabId,
     epicHandle,
     navigate,
-    previewTileInTab,
+    openTile,
     queryClient,
     tabHostClient,
     tabHostId,
@@ -252,16 +248,14 @@ export function useArtifactLinkOpener(args: {
   );
 
   const openLink = useCallback(
-    (link: OpenableArtifactLink): void => {
+    (link: OpenableArtifactLink, event: LinkClickEvent): void => {
       if (link.kind === "external") {
+        if (urlOpenPending) return;
         supersedePending();
-        if (externalOpenInFlightRef.current) return;
-        externalOpenInFlightRef.current = true;
-        openExternalLink(link.url, {
-          onSettled: () => {
-            externalOpenInFlightRef.current = false;
-          },
-        });
+        // An artifact document's external link is markdown egress like any
+        // other (A1): the `markdown` setting decides in-app vs the OS browser,
+        // and the click's modifiers override it (A3, R7).
+        void openUrl(link.url, "markdown", event);
         return;
       }
       if (openFile === null || chatDeps === null) {
@@ -317,13 +311,14 @@ export function useArtifactLinkOpener(args: {
     [
       args.epicId,
       chatDeps,
-      openExternalLink,
       openFile,
+      openUrl,
       selfFolderChain,
       supersedePending,
+      urlOpenPending,
       worktrees.isError,
     ],
   );
 
-  return { openLink, isExternalPending };
+  return { openLink };
 }

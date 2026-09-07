@@ -387,6 +387,9 @@ function fakeRemoteSession(): FakeRemoteSession {
     subscribe: vi.fn(() => {
       throw new Error("not exercised by this test");
     }),
+    subscribeAtVersion: vi.fn(() => {
+      throw new Error("not exercised by this test");
+    }),
     subscribeWithParamsProvider: vi.fn(() => {
       throw new Error("not exercised by this test");
     }),
@@ -452,7 +455,7 @@ function installRemoteTransport(sessionsByKey: {
       return {
         session,
         messenger: new RemoteHostMessenger(session),
-        streamClient: new RemoteStreamClient(session),
+        streamClient: new RemoteStreamClient(session, () => null),
       };
     },
   );

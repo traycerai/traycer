@@ -52,7 +52,11 @@ describe("isRateLimitReadStillRunningOnHost", () => {
   it("is false for a request the transport never dispatched", () => {
     expect(
       isRateLimitReadStillRunningOnHost(
-        new RetryableTransportError({ ...BASE, fatalDetails: null }),
+        new RetryableTransportError({
+          ...BASE,
+          fatalDetails: null,
+          replaySafetyFromKey: false,
+        }),
       ),
     ).toBe(false);
   });

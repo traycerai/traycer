@@ -30,6 +30,7 @@ interface BrowserViewWindowAttachmentOptions {
   readonly geometry: BrowserViewGeometry;
   readonly annotations: BrowserViewAnnotationHost;
   readonly notifyHostWindowRendererReset: (windowId: string) => void;
+  readonly emitStatus: (entry: BrowserViewEntry) => void;
   /** A guest whose owning renderer vanished before accepting it is orphaned. */
   readonly closeEntry: (entry: BrowserViewEntry) => void;
 }
@@ -46,6 +47,7 @@ export class BrowserViewWindowAttachment {
   private readonly geometry: BrowserViewGeometry;
   private readonly annotations: BrowserViewAnnotationHost;
   private readonly notifyHostWindowRendererReset: (windowId: string) => void;
+  private readonly emitStatus: (entry: BrowserViewEntry) => void;
   private readonly closeEntry: (entry: BrowserViewEntry) => void;
   private readonly hostWindowResetListenersByWindowId = new Map<
     string,
@@ -58,6 +60,7 @@ export class BrowserViewWindowAttachment {
     this.geometry = options.geometry;
     this.annotations = options.annotations;
     this.notifyHostWindowRendererReset = options.notifyHostWindowRendererReset;
+    this.emitStatus = options.emitStatus;
     this.closeEntry = options.closeEntry;
   }
 
@@ -186,10 +189,21 @@ export class BrowserViewWindowAttachment {
     }
   }
 
+  /**
+   * A guest whose tile or window is gone stops compositing - and SAYS so.
+   *
+   * `viewed` on `electronTabState` is read straight off `desiredVisible`, and a
+   * silent hide left the host believing a tab was still on the user's screen
+   * for the rest of the session: it is what the host's own "is a human looking
+   * at this" reasoning runs on. Emitted only on the edge, because this runs
+   * over every entry on every visibility reconcile.
+   */
   private hideDetached(entry: BrowserViewEntry): void {
+    const wasVisible = entry.desiredVisible;
     entry.desiredVisible = false;
     entry.parentWindowId = null;
     this.geometry.hide(entry);
+    if (wasVisible) this.emitStatus(entry);
   }
 
   private handleHostWindowRendererReset(

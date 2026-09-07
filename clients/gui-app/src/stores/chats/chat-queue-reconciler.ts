@@ -888,7 +888,11 @@ export function reconcileQueueChange(
     queuedPendingActions.reduce(
       // This transition happens BECAUSE the host's queue reports the
       // message - the confirmation IS the trigger.
-      (next, action) => addAcceptedAction(next, action, input.nowMs, true),
+      (next, action) =>
+        addAcceptedAction(next, action, input.nowMs, {
+          confirmedByHost: true,
+          messageConfirmedByHost: false,
+        }),
       {},
     ),
     input.nowMs,
@@ -992,12 +996,16 @@ export function confirmAcceptedSendByMessageId(
     (candidate) =>
       candidate.action === "send" &&
       candidate.messageId === messageId &&
-      !candidate.confirmedByHost,
+      (!candidate.confirmedByHost || candidate.displayWorktreeIntent !== null),
   );
   if (accepted === undefined) return acceptedActions;
   return {
     ...acceptedActions,
-    [accepted.clientActionId]: { ...accepted, confirmedByHost: true },
+    [accepted.clientActionId]: {
+      ...accepted,
+      confirmedByHost: true,
+      displayWorktreeIntent: null,
+    },
   };
 }
 
@@ -1066,8 +1074,11 @@ export function reconcileSnapshotChange(
             next.acceptedActions,
             pending,
             input.nowMs,
-            // Reached only when the snapshot SHOWS the message.
-            true,
+            {
+              // Reached only when the snapshot SHOWS the message or queue.
+              confirmedByHost: true,
+              messageConfirmedByHost: acceptedMessageIds.has(pending.messageId),
+            },
           ),
           pendingUserMessages: next.pendingUserMessages.filter(
             (message) => message.clientActionId !== pending.clientActionId,
@@ -1239,7 +1250,13 @@ function reconcileAcceptedSends(
         acceptedMessageIds.has(accepted.messageId) ||
         queueContainsPendingSend(input.queue, accepted.messageId, undefined)
       ) {
-        if (accepted.confirmedByHost) return next;
+        if (
+          accepted.confirmedByHost &&
+          (!acceptedMessageIds.has(accepted.messageId) ||
+            accepted.displayWorktreeIntent === null)
+        ) {
+          return next;
+        }
         return {
           ...next,
           confirmedAcceptedActions: {
@@ -1247,6 +1264,9 @@ function reconcileAcceptedSends(
             [accepted.clientActionId]: {
               ...accepted,
               confirmedByHost: true,
+              displayWorktreeIntent: acceptedMessageIds.has(accepted.messageId)
+                ? null
+                : accepted.displayWorktreeIntent,
             },
           },
         };
@@ -1725,14 +1745,7 @@ export function withoutPendingAction(
   return next;
 }
 
-/**
- * Add a pending action as accepted to the record. Applies pruning to
- * enforce retention limits.
- */
-export function addAcceptedAction(
-  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
-  pending: PendingChatAction,
-  now: number,
+export interface AcceptedActionConfirmation {
   /**
    * Whether host state in hand at this transition CONFIRMS the send. Explicit
    * at every call site, because the answer differs per door and a default
@@ -1745,7 +1758,20 @@ export function addAcceptedAction(
    * Getting this wrong resurrects a canceled prompt - see
    * {@link AcceptedChatAction.confirmedByHost}.
    */
-  confirmedByHost: boolean,
+  readonly confirmedByHost: boolean;
+  /** Whether transcript confirmation makes the display overlay obsolete. */
+  readonly messageConfirmedByHost: boolean;
+}
+
+/**
+ * Add a pending action as accepted to the record. Applies pruning to
+ * enforce retention limits.
+ */
+export function addAcceptedAction(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  pending: PendingChatAction,
+  now: number,
+  confirmation: AcceptedActionConfirmation,
 ): Readonly<Record<string, AcceptedChatAction>> {
   return pruneAcceptedActions(
     {
@@ -1753,6 +1779,7 @@ export function addAcceptedAction(
       [pending.clientActionId]: {
         clientActionId: pending.clientActionId,
         action: pending.action,
+        queueItemId: pending.queueItemId,
         interviewBlockId: pending.interviewBlockId,
         interviewDeliveryRetry: pending.interviewDeliveryRetry,
         messageId: pending.messageId,
@@ -1766,8 +1793,17 @@ export function addAcceptedAction(
         accountContext: pending.accountContext,
         deliveryPolicy: pending.deliveryPolicy,
         restoreWorktreeIntent: pending.restoreWorktreeIntent,
+        // Queue confirmation deliberately keeps this display copy: queued
+        // sends are accepted before their deferred worktree setup begins.
+        // Transcript confirmation (or an edit ack, which follows setup)
+        // retires it while leaving the recovery tuple intact.
+        displayWorktreeIntent:
+          pending.action === "editUserMessage" ||
+          confirmation.messageConfirmedByHost
+            ? null
+            : pending.displayWorktreeIntent,
         connectionEpoch: pending.connectionEpoch,
-        confirmedByHost,
+        confirmedByHost: confirmation.confirmedByHost,
       },
     },
     now,
@@ -1779,10 +1815,13 @@ export function addAcceptedAction(
  * record cap (64 records). Prioritizes send/editUserMessage actions and
  * recent entries. Returns the same object if no pruning is needed.
  *
- * An accepted-but-unresolved interview action (`interviewBlockId !== null`)
- * or delivery retry (`interviewDeliveryRetry !== null`) is a lifecycle lock,
+ * An accepted-but-unresolved interview action (`interviewBlockId !== null`),
+ * delivery retry (`interviewDeliveryRetry !== null`), or queue cancellation
+ * (`queueItemId !== null`) is a lifecycle lock,
  * not generic action history. Its duplicate-dispatch guard must survive until
- * the corresponding authoritative interview delivery transition retires it.
+ * the corresponding authoritative host transition retires it. A cancellation
+ * also carries the UI projection that keeps its queue row hidden between an
+ * accepted ack and the durable queue update.
  * Exempt it from the retention window and record cap below, or a
  * slow-to-resolve interview (or enough unrelated traffic to evict it from the
  * cap) would silently un-gate a duplicate submission before the host
@@ -1796,15 +1835,9 @@ export function pruneAcceptedActions(
   const MAX_RECORDS = 64;
 
   const all = Object.values(acceptedActions);
-  const interviewLocked = all.filter(
-    (action) =>
-      action.interviewBlockId !== null ||
-      action.interviewDeliveryRetry !== null,
-  );
+  const lifecycleLocked = all.filter(isAcceptedActionLifecycleLocked);
   const prunable = all.filter(
-    (action) =>
-      action.interviewBlockId === null &&
-      action.interviewDeliveryRetry === null,
+    (action) => !isAcceptedActionLifecycleLocked(action),
   );
 
   const unexpired = prunable.filter(
@@ -1816,7 +1849,7 @@ export function pruneAcceptedActions(
       : unexpired
           .toSorted(compareAcceptedActionForRetention)
           .slice(0, MAX_RECORDS);
-  const kept = [...interviewLocked, ...retained];
+  const kept = [...lifecycleLocked, ...retained];
   if (kept.length === all.length) {
     return acceptedActions;
   }
@@ -1824,6 +1857,39 @@ export function pruneAcceptedActions(
     next[action.clientActionId] = action;
     return next;
   }, {});
+}
+
+/**
+ * Retire accepted queue cancellations once an authoritative queue no longer
+ * contains their target. Until then the record carries the optimistic
+ * projection across the ack-to-queue-update gap.
+ */
+export function withoutResolvedAcceptedQueueCancellations(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  queue: ChatQueueState,
+): Readonly<Record<string, AcceptedChatAction>> {
+  const queueItemIds = new Set(queue.items.map((item) => item.queueItemId));
+  const retained = Object.values(acceptedActions).filter(
+    (action) =>
+      action.action !== "queueCancel" ||
+      action.queueItemId === null ||
+      queueItemIds.has(action.queueItemId),
+  );
+  if (retained.length === Object.keys(acceptedActions).length) {
+    return acceptedActions;
+  }
+  return retained.reduce<Record<string, AcceptedChatAction>>((next, action) => {
+    next[action.clientActionId] = action;
+    return next;
+  }, {});
+}
+
+function isAcceptedActionLifecycleLocked(action: AcceptedChatAction): boolean {
+  return (
+    action.interviewBlockId !== null ||
+    action.interviewDeliveryRetry !== null ||
+    (action.action === "queueCancel" && action.queueItemId !== null)
+  );
 }
 
 /**

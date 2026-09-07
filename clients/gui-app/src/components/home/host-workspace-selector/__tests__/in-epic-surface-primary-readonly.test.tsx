@@ -18,6 +18,7 @@ import type {
   WorktreeBinding,
   WorktreeBindingEntry,
   WorktreeFolderIntent,
+  WorktreeIntent,
   WorktreeWorkspaceSummaryV15,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { PreparedWorkspaceFolder } from "@traycer/protocol/host/epic/unary-schemas";
@@ -351,6 +352,7 @@ const BINDING: WorktreeBinding = {
     bindingEntry({ workspacePath: "/repo/beta", isPrimary: true }),
   ],
 };
+let inFlightWorktreeIntent: WorktreeIntent | null = null;
 const THREE_FOLDER_BINDING: WorktreeBinding = {
   entries: [
     bindingEntry({ workspacePath: "/repo/alpha", isPrimary: false }),
@@ -381,6 +383,7 @@ function BoundSurfaceTree(props: {
           isOwnerActive: false,
           hasActiveTurn: false,
           ownerLabel: "Owner",
+          inFlightWorktreeIntent,
           missingWorktreePaths: [],
           bindingResolved: props.bindingResolved,
           onBindingCommitted: props.onBindingCommitted,
@@ -422,6 +425,7 @@ function renderBoundSurface(
 }
 
 beforeEach(() => {
+  inFlightWorktreeIntent = null;
   recentMocks.prepareRecent.mockResolvedValue({ folders: [RECENT_FOLDER] });
   recentMocks.recordRecentAsync.mockResolvedValue({});
   mutationMocks.createWorktree.mockResolvedValue({ perEntry: [] });
@@ -452,6 +456,53 @@ afterEach(() => {
   recentMocks.prepareRecent.mockReset();
   recentMocks.recordRecentAsync.mockReset();
   useWorktreeIntentStagingStore.getState().resetForTests();
+});
+
+it("keeps a dispatched new-worktree branch visible while the binding is unchanged", async () => {
+  seedResolvedBindingMetadata();
+  inFlightWorktreeIntent = {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-replacement")],
+  };
+
+  renderBoundSurface("chat", true);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  const alphaRow = (await screen.findAllByTestId("folder-row")).find(
+    (row) => row.getAttribute("data-path") === "/repo/alpha",
+  );
+
+  expect(alphaRow).toBeDefined();
+  if (alphaRow === undefined) return;
+  expect(
+    within(alphaRow).getByTestId("folder-branch-trigger").textContent,
+  ).toContain("feat-replacement");
+});
+
+it("merges a one-folder re-pick over a multi-folder dispatched intent", async () => {
+  seedResolvedBindingMetadata();
+  inFlightWorktreeIntent = {
+    entries: [
+      newWorktreeIntent("/repo/alpha", "feat-alpha-dispatched"),
+      newWorktreeIntent("/repo/beta", "feat-beta-dispatched"),
+    ],
+  };
+  useWorktreeIntentStagingStore.getState().stageIntent(CHAT_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-alpha-repicked")],
+  });
+
+  renderBoundSurface("chat", true);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  const rows = await screen.findAllByTestId("folder-row");
+  const branchFor = (workspacePath: string): string | null => {
+    const row = rows.find(
+      (candidate) => candidate.getAttribute("data-path") === workspacePath,
+    );
+    return row === undefined
+      ? null
+      : within(row).getByTestId("folder-branch-trigger").textContent;
+  };
+
+  expect(branchFor("/repo/alpha")).toContain("feat-alpha-repicked");
+  expect(branchFor("/repo/beta")).toContain("feat-beta-dispatched");
 });
 
 describe.each(["chat", "terminal-agent"] as const)(

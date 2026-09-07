@@ -6,9 +6,17 @@
  * The projector suite already covers the store action in isolation
  * (`epic-projector.test.ts` "structural change (parent move) updates
  * childrenByParent buckets"). This file is the commit-level proof that the
- * dual-write is not a persist no-op: local parentId moved AND the RPC went
- * out with those ids. Reload/second-session against a real host is out of
- * scope here.
+ * commit is not a persist no-op.
+ *
+ * RETARGETED for T11's write-command queue. It used to assert a DUAL WRITE -
+ * the local Y `parentId` moved AND `epic.reparentArtifact` went out - because
+ * that is what the commit did. The queue now owns the write: the drop enqueues
+ * a `reparent-artifact` command, the optimistic overlay moves the PROJECTION
+ * immediately, and the doc is not written locally at all. A surviving direct Y
+ * write would apply the move twice, once locally and once when the command
+ * commits, which is the double-apply the queue exists to prevent - so the
+ * absence of it is now part of what this file proves. Reload/second-session
+ * against a real host is out of scope here.
  *
  * Only `getEpicSessionHandleHostClient` is stubbed — the same request seam
  * the routing suite uses — so peek returns the live handle. The rest of the
@@ -21,11 +29,11 @@ import { commitSidebarReparentDrop } from "@/components/epic-canvas/dnd/root-dnd
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { getArtifactEntry } from "@/stores/epics/open-epic/projection-helpers";
 import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 
@@ -77,7 +85,7 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
-function newSession(): OpenEpicStoreHandle {
+function newSession(): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
@@ -90,11 +98,21 @@ function newSession(): OpenEpicStoreHandle {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: "epic-1",
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   if (captured.value === null) throw new Error("factory not invoked");
   const seed = Y.encodeStateAsUpdate(new Y.Doc());
@@ -115,7 +133,7 @@ describe("commitSidebarReparentDrop persists an artifact reparent on a live doc"
     seam.hasClient = true;
   });
 
-  it("moves Y.Doc parentId and sends epic.reparentArtifact with those ids", () => {
+  it("moves the projected parent optimistically and leaves the doc to the queue", async () => {
     const handle = newSession();
     const parent = createArtifactInDocForTests(handle.doc, "spec", null);
     const child = createArtifactInDocForTests(handle.doc, "spec", null);
@@ -125,7 +143,7 @@ describe("commitSidebarReparentDrop persists an artifact reparent on a live doc"
     if (childBefore === null) throw new Error("seeded child missing from doc");
     expect(childBefore.get("parentId")).toBeNull();
 
-    commitSidebarReparentDrop({
+    await commitSidebarReparentDrop({
       epicId: "epic-1",
       sourceNodeId: child,
       newParentId: parent,
@@ -134,16 +152,28 @@ describe("commitSidebarReparentDrop persists an artifact reparent on a live doc"
       queryClient,
     });
 
+    // The user sees the move immediately - that is the optimistic overlay the
+    // queue stamps on enqueue, and it is what makes the drop feel committed
+    // before any round trip.
+    expect(handle.store.getState().tree.nodeById[child].parentId).toBe(parent);
+
+    // The command is queued, carrying exactly the intent the direct pair used
+    // to express.
+    const queued = handle.store.getState().writeCommands;
+    expect(queued).toHaveLength(1);
+    expect(queued[0].intent).toEqual({
+      kind: "reparent-artifact",
+      artifactId: child,
+      parentId: parent,
+    });
+
+    // And the doc is NOT written locally. The queue is the only writer; a
+    // direct Y write beside it would apply the move twice.
     const childAfter = getArtifactEntry(handle.doc, child);
     if (childAfter === null)
       throw new Error("child missing from doc after drop");
-    expect(childAfter.get("parentId")).toBe(parent);
-    expect(handle.store.getState().tree.nodeById[child].parentId).toBe(parent);
-    expect(seam.request).toHaveBeenCalledTimes(1);
-    expect(seam.request).toHaveBeenCalledWith("epic.reparentArtifact", {
-      epicId: "epic-1",
-      artifactId: child,
-      newParentId: parent,
-    });
+    expect(childAfter.get("parentId")).toBeNull();
+    // The RPC is the queue's to send on its own schedule, not this commit's.
+    expect(seam.request).not.toHaveBeenCalled();
   });
 });

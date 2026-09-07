@@ -159,6 +159,7 @@ function codeFileLeaves(args: CodeFileLeavesArgs): ReadonlyArray<CommandItem> {
               tabId: ctx.activeTabId,
               groupId: ctx.targetGroupId,
               ref,
+              dedupe: false,
               navigateNestedFocus: ctx.router.navigateNestedFocus,
             });
           },
@@ -205,6 +206,7 @@ function liveCodeFileLeaves(args: {
           tabId: args.ctx.activeTabId,
           groupId: args.ctx.targetGroupId,
           ref,
+          dedupe: false,
           navigateNestedFocus: args.ctx.router.navigateNestedFocus,
         });
       },
@@ -385,6 +387,7 @@ function artifactLeaves(args: ArtifactLeavesArgs): ReadonlyArray<CommandItem> {
               tabId: ctx.activeTabId,
               groupId: ctx.targetGroupId,
               ref,
+              dedupe: false,
               navigateNestedFocus: ctx.router.navigateNestedFocus,
             });
           },

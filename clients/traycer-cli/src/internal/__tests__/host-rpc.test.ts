@@ -201,14 +201,19 @@ describe("callHostRpc", () => {
       METHOD,
       params,
       expect.objectContaining({
-        endpoint: {
-          hostId: "d1",
-          websocketUrl: "ws://127.0.0.1:9/rpc",
-        },
-        bearer: expect.objectContaining({
-          identity: { userId: "u1" },
+        // `host.status`-style CLI unary calls are reads: a `null` key asserts
+        // no deduplication property, matching the production call site.
+        idempotencyKey: null,
+        authority: expect.objectContaining({
+          endpoint: {
+            hostId: "d1",
+            websocketUrl: "ws://127.0.0.1:9/rpc",
+          },
+          bearer: expect.objectContaining({
+            identity: { userId: "u1" },
+          }),
+          abortSignal: expect.any(AbortSignal),
         }),
-        abortSignal: expect.any(AbortSignal),
       }),
     );
     expect(rotateMock).not.toHaveBeenCalled();

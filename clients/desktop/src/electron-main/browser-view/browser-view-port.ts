@@ -1,6 +1,50 @@
 import type { BrowserWindowConstructorOptions } from "electron";
-import type { BrowserViewBounds } from "@traycer-clients/shared/platform/browser-view";
+import type {
+  BrowserCdpCommand,
+  BrowserCdpTarget,
+  BrowserSessionProfileKind,
+  BrowserStorageState,
+} from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserViewBounds,
+  BrowserViewNativeTabCapability,
+  BrowserViewNativeTabKey,
+} from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserStorageSession } from "./storage/browser-storage-state";
+
+/**
+ * One `createElectronTab` frame on its way into the native manager.
+ *
+ * MAIN-side only, and that is the point (H10): the frame is consumed by the
+ * process that owns the jar, so the seed never crosses an IPC boundary and no
+ * renderer can inject one. Every check the seed goes through - domain
+ * re-derivation against the tab's own origin, expiry, the bound, the ledger
+ * gate, the serializer - is unchanged (H05 item 1).
+ */
+export interface BrowserViewEnsureTab extends BrowserViewNativeTabKey {
+  readonly requestedUrl: string;
+  /**
+   * Which jar the guest is born into. It travels from the host's
+   * `createElectronTab` frame; `isolated` selects the session's own in-memory
+   * partition and never carries a seed.
+   */
+  readonly profile: BrowserSessionProfileKind;
+  readonly seedStorageState: BrowserStorageState | null;
+  /**
+   * The live stream incarnation the `createElectronTab` frame arrived on - the
+   * SAME provenance `primaryProfileObserved` carries, and for the same reason:
+   * the seed is a host->jar write, so it is priced against the connection that
+   * sent it (the forget ledger's per-connection ack watermark and the observed
+   * rate budget both key on this). Null off-connection, which fails the ledger
+   * gate closed.
+   */
+  readonly connectionId: string | null;
+}
+
+export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabCapability {
+  readonly target: BrowserCdpTarget;
+  readonly command: BrowserCdpCommand;
+}
 
 export interface BrowserViewDebugger {
   isAttached(): boolean;
@@ -92,6 +136,11 @@ export interface BrowserViewDevToolsWindow {
 export interface BrowserViewPopupWebContents {
   readonly id: number;
   once(event: "destroyed", listener: () => void): void;
+  setWindowOpenHandler(
+    handler: (
+      details: BrowserViewWindowOpenDetails,
+    ) => BrowserViewWindowOpenResult,
+  ): void;
   on: NodeJS.EventEmitter["on"];
   off: NodeJS.EventEmitter["off"];
 }
@@ -153,6 +202,12 @@ export type BrowserViewInputModifier = "meta" | "control" | "shift" | "alt";
 export interface BrowserViewHostWebContents {
   on: NodeJS.EventEmitter["on"];
   off: NodeJS.EventEmitter["off"];
+  /**
+   * Move OS keyboard focus off a focused guest and onto the host renderer.
+   * Focusing a host DOM element is not enough by itself - the caret would
+   * render while keystrokes still went to the `WebContentsView`.
+   */
+  focus(): void;
   sendInputEvent(event: {
     readonly type: "keyDown";
     readonly keyCode: string;

@@ -349,6 +349,14 @@ export const PERSIST_STORES = [
     leaf: "notifications-filter",
     kind: "static",
   },
+  // Which feature announcements this install has shown, keyed by feature id
+  // (`feature-announcements-store.ts`). Machine-local like onboarding: it is
+  // a fact about what this install has said, not about who is signed in.
+  {
+    camelName: "featureAnnouncements",
+    leaf: "feature-announcements",
+    kind: "static",
+  },
 
   // ── Non-zustand keys ─────────────────────────────────────────────────────
   // `last-route:<windowId>` — per-window router history (persistent-history.ts).

@@ -4,7 +4,7 @@ import { ActiveAgentsPanel } from "@/components/chat/chat-active-agents-panel";
 import { AgentStopList } from "@/components/chat/chat-agent-stop-list";
 import { readEpicCanvasDragSourceData } from "@/components/epic-canvas/dnd/dnd";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 
 interface CapturedDraggable {
   readonly id: string;
@@ -17,9 +17,7 @@ const dnd = vi.hoisted(() => ({
 }));
 
 const navigation = vi.hoisted(() => ({
-  openTileInTab: vi.fn<(viewTabId: string, node: EpicCanvasTileRef) => null>(
-    () => null,
-  ),
+  openTile: vi.fn<(intent: TileOpenIntent) => null>(() => null),
 }));
 
 vi.mock("@dnd-kit/core", async (importOriginal) => {
@@ -40,7 +38,7 @@ vi.mock("@dnd-kit/core", async (importOriginal) => {
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({
-    openTileInTab: navigation.openTileInTab,
+    openTile: navigation.openTile,
   }),
 }));
 
@@ -83,7 +81,7 @@ function row(over: Partial<AgentRow> & Pick<AgentRow, "id">): AgentRow {
 
 beforeEach(() => {
   dnd.draggables = [];
-  navigation.openTileInTab.mockClear();
+  navigation.openTile.mockClear();
 });
 
 afterEach(cleanup);
@@ -176,17 +174,30 @@ describe("ActiveAgentsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open Root chat" }));
     fireEvent.click(screen.getByRole("button", { name: "Open Sub-agent two" }));
 
+    // The row press is a deliberate open of a named agent into THIS view tab,
+    // de-duped onto an already-open tile, and it carries the click's modifier
+    // triple so a shift/alt-click still reaches the resolver.
     expect(
-      navigation.openTileInTab.mock.calls.map(
-        ([viewTabId, { instanceId, ...node }]) => ({
-          viewTabId,
+      navigation.openTile.mock.calls.map(
+        ([
+          {
+            node: { instanceId, ...node },
+            ...intent
+          },
+        ]) => ({
+          ...intent,
           instanceIdType: typeof instanceId,
           node,
         }),
       ),
     ).toEqual([
       {
-        viewTabId: "tab-1",
+        target: { tabId: "tab-1" },
+        gesture: "explicit",
+        modifiers: { shift: false, alt: false, middle: false },
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
         instanceIdType: "string",
         node: {
           id: "self",
@@ -196,7 +207,12 @@ describe("ActiveAgentsPanel", () => {
         },
       },
       {
-        viewTabId: "tab-1",
+        target: { tabId: "tab-1" },
+        gesture: "explicit",
+        modifiers: { shift: false, alt: false, middle: false },
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
         instanceIdType: "string",
         node: {
           id: "child-2",

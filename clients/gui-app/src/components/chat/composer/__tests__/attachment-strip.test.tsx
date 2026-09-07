@@ -14,7 +14,10 @@ describe("AttachmentStrip", () => {
       <AttachmentStrip
         content={duplicateImageContent()}
         onRemoveImage={() => undefined}
-        fetcher={() => Promise.reject(new Error("unused"))}
+        fetcher={{
+          scopeKey: "test-scope",
+          fetch: () => Promise.reject(new Error("unused")),
+        }}
         sessionObjectUrl={() => null}
       />,
     );
@@ -47,7 +50,10 @@ describe("AttachmentStrip", () => {
       <AttachmentStrip
         content={duplicateImageContent()}
         onRemoveImage={() => undefined}
-        fetcher={() => Promise.reject(new Error("unused"))}
+        fetcher={{
+          scopeKey: "test-scope",
+          fetch: () => Promise.reject(new Error("unused")),
+        }}
         sessionObjectUrl={() => null}
         leadingAttachments={
           <div data-testid="browser-annotation-cards" className="contents">

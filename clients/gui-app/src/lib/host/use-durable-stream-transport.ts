@@ -4,7 +4,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import {
   openDurableStreamTransport,
-  type DurableStreamTransport,
+  type AttributableDurableStreamTransport,
 } from "@/lib/host/durable-stream-transport";
 import { dialableHostEndpoint } from "@/lib/host/transport-key";
 
@@ -22,7 +22,7 @@ import { dialableHostEndpoint } from "@/lib/host/transport-key";
  */
 export function useDurableStreamTransportFactory(): (
   hostId: string,
-) => DurableStreamTransport {
+) => AttributableDurableStreamTransport {
   const directory = useHostDirectory();
   const globalClient = useHostClient();
   const runnerHost = useRunnerHost();

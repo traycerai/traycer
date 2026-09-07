@@ -1018,9 +1018,6 @@ function AssistantSegment({
         <InterviewSegment
           blockId={segment.id}
           status={segment.status}
-          toolName={segment.toolName}
-          title={segment.title}
-          description={segment.description}
           questions={segment.questions}
           answers={segment.answers}
           draftAnswers={segment.draftAnswers}

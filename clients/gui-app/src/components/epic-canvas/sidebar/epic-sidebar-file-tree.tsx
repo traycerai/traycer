@@ -65,7 +65,7 @@ import { getBasename } from "@/lib/path/cross-platform-path";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { PanelSearchField } from "@/components/epic-canvas/sidebar/epic-sidebar-search-field";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useGitListChangedFilesSubscription } from "@/hooks/git/use-git-list-changed-files-subscription";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { useShadowScrollerTouchShield } from "@/hooks/ui/use-shadow-scroller-touch-shield";
@@ -87,9 +87,7 @@ import {
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
 import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
-import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
 import {
   ancestorDirectoryPathsOf,
@@ -109,6 +107,7 @@ import {
   useFileTreeStore,
 } from "@/stores/file-tree/file-tree-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 const WORKSPACE_FILE_LIST_METHOD = "workspace.subscribeFileList";
 
@@ -536,13 +535,7 @@ function FileTreeBodyForResolvedHost(
   const nameByTreePath = source.fileNameByPath;
   const gitStatus = source.gitStatus;
 
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTilePreviewInTabFocusTarget,
-  );
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
 
   // Single source of truth for "tree row path -> workspace file ref". Reused by
   // the open handlers and the drag bridge so a row that is not an openable file
@@ -570,14 +563,13 @@ function FileTreeBodyForResolvedHost(
     onOpen(_treePath: string) {},
   });
   useEffect(() => {
-    const openInTab = (
-      treePath: string,
-      open: (tabId: string, ref: WorkspaceFileRef) => NestedFocusTarget | null,
-    ) => {
+    // Pierre reports selection/open through its own model, so no mouse event
+    // reaches here and the intent carries no modifiers.
+    const openInTab = (treePath: string, gesture: "single" | "double") => {
       const ref = workspaceFileRefForTreePath(treePath);
       if (ref === null) return;
       onLatchHost();
-      navigateNested(props.epicId, props.tabId, () => open(props.tabId, ref));
+      openTile(tileIntent(ref, { tabId: props.tabId }, gesture, "direct_ui"));
     };
     // Preview is right on a touch viewport too, even though the double-click
     // that promotes it there has no touch equivalent: that viewport shows ONE
@@ -587,20 +579,12 @@ function FileTreeBodyForResolvedHost(
     // preview is what browsing a tree by tap wants, and the row itself is the
     // way back to a file already visited.
     handlersRef.current.onSelect = (treePath) => {
-      openInTab(treePath, prepareOpenTilePreviewInTabFocusTarget);
+      openInTab(treePath, "single");
     };
     handlersRef.current.onOpen = (treePath) => {
-      openInTab(treePath, prepareOpenTileInTabFocusTarget);
+      openInTab(treePath, "double");
     };
-  }, [
-    navigateNested,
-    workspaceFileRefForTreePath,
-    props.epicId,
-    props.tabId,
-    prepareOpenTilePreviewInTabFocusTarget,
-    prepareOpenTileInTabFocusTarget,
-    onLatchHost,
-  ]);
+  }, [openTile, workspaceFileRefForTreePath, props.tabId, onLatchHost]);
 
   // True while the REVEAL path is rewriting the selection programmatically.
   // Pierre reports every selection change through the same `onSelectionChange`

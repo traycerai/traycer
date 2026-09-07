@@ -22,6 +22,7 @@ interface HarnessModelPickerListProps {
   readonly initialTopMostItemIndex: IndexLocationWithAlign;
   readonly catalogLoading: boolean;
   readonly catalogError: boolean;
+  readonly hostUnavailableLabel: string | null;
   readonly activeProvider: GuiHarnessCatalogEntry | null;
   readonly onHover: (rowId: string) => void;
   readonly onActive: (rowId: string) => void;
@@ -45,6 +46,7 @@ export function HarnessModelPickerList(
     initialTopMostItemIndex,
     catalogLoading,
     catalogError,
+    hostUnavailableLabel,
     activeProvider,
     onHover,
     onActive,
@@ -55,6 +57,7 @@ export function HarnessModelPickerList(
   const stateRow = ModelRowsState({
     catalogLoading,
     catalogError,
+    hostUnavailableLabel,
     hasQuery,
     activeProvider,
     rowsCount: rows.length,

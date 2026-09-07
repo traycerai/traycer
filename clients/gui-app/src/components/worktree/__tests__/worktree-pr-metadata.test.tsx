@@ -6,7 +6,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { PrLightItem } from "@traycer/protocol/host/pr-schemas";
 import type {
   DiskWorktreeEntry,
   WorktreeBinding,
@@ -26,17 +26,20 @@ import {
 } from "@/components/worktree/worktree-pr-metadata";
 import { WorktreePrStateIcons } from "@/components/worktree/worktree-pr-state-icons";
 import {
+  ownerPrReferences,
   ownerWorkspaceMetadataItems,
   worktreePrReferences,
   type WorktreePrReference,
 } from "@/components/worktree/worktree-pr-metadata-model";
-import { RunnerHostContext } from "@/providers/runner-host-context";
 import {
   compositeOverBackground,
   contrastRatio,
   DARK_THEME_SURFACES,
   LIGHT_THEME_SURFACES,
 } from "../../../../__tests__/contrast";
+
+const openLink = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
 
 function worktree(
   overrides: Partial<WorktreeHostEntryV12>,
@@ -129,6 +132,51 @@ function workspaceSummary(
   };
 }
 
+function prReferenceFixture(
+  overrides: Partial<WorktreePrReference>,
+): WorktreePrReference {
+  return {
+    key: "worktree:42:https://github.com/acme/app/pull/42",
+    label: "#42",
+    ariaLabel: "Open PR #42 Open",
+    state: "open",
+    prNumber: 42,
+    url: "https://github.com/acme/app/pull/42",
+    githubHost: "github.com",
+    owner: "acme",
+    repo: "app",
+    branch: "feature/login",
+    worktreePath: "/worktrees/app/feature-login",
+    ...overrides,
+  };
+}
+
+function prLightItem(overrides: Partial<PrLightItem>): PrLightItem {
+  return {
+    githubHost: "github.com",
+    base: { owner: "acme", repo: "app", prNumber: 42 },
+    prUrl: "https://github.com/acme/app/pull/42",
+    state: "open",
+    liveness: "live",
+    observedAt: null,
+    isDraft: false,
+    title: "Add login",
+    baseRefName: "main",
+    headRefName: "feature/login",
+    additions: null,
+    deletions: null,
+    checksRollup: null,
+    reviewDecision: null,
+    commentCount: null,
+    updatedAt: null,
+    repoIdentifier: { owner: "acme", repo: "app" },
+    repoRole: "superproject",
+    linkGroupKey: "/worktrees/app/feature-login",
+    owners: [{ ownerId: "owner-1", ownerKind: "chat" }],
+    ...overrides,
+  };
+}
+
 function renderWithProviders(node: React.ReactNode): void {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -140,37 +188,10 @@ function renderWithProviders(node: React.ReactNode): void {
   );
 }
 
-function createRunnerHost(): MockRunnerHost {
-  return new MockRunnerHost({
-    signInUrl: "https://auth.traycer.test/sign-in",
-    authnBaseUrl: "https://auth.traycer.test",
-    localHost: null,
-    hosts: [],
-    workspaceFolderPickerPaths: undefined,
-    hasLocalHost: undefined,
-    traycerCli: undefined,
-  });
-}
-
-function renderWithRunnerHost(
-  node: React.ReactNode,
-  runnerHost: MockRunnerHost | null,
-): void {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  render(
-    <QueryClientProvider client={client}>
-      <RunnerHostContext.Provider value={runnerHost}>
-        <TooltipProvider delayDuration={0}>{node}</TooltipProvider>
-      </RunnerHostContext.Provider>
-    </QueryClientProvider>,
-  );
-}
-
 describe("worktree PR metadata", () => {
   afterEach(() => {
     cleanup();
+    openLink.mockReset();
   });
 
   it("carries branch and worktree path onto superproject and submodule PRs", () => {
@@ -321,6 +342,7 @@ describe("worktree PR metadata", () => {
           binding={BINDING}
           worktrees={[entry]}
           workspaces={[]}
+          prReferences={worktreePrReferences([entry])}
           pending={false}
           hostUnavailable={false}
           error={false}
@@ -416,6 +438,7 @@ describe("worktree PR metadata", () => {
         binding={BINDING}
         worktrees={[entry]}
         workspaces={[]}
+        prReferences={worktreePrReferences([entry])}
         pending={false}
         hostUnavailable={false}
         error={false}
@@ -451,6 +474,7 @@ describe("worktree PR metadata", () => {
         binding={BINDING}
         worktrees={[worktree({})]}
         workspaces={[]}
+        prReferences={worktreePrReferences([worktree({})])}
         pending={false}
         hostUnavailable={false}
         error={false}
@@ -471,16 +495,12 @@ describe("worktree PR metadata", () => {
     expect(document.querySelector(".lucide-external-link")).toBeNull();
   });
 
-  it("sends a meta-click straight to the host instead of the in-app PR view", async () => {
+  it("sends a meta-click straight to openLink instead of the in-app PR view", () => {
     // Cmd/Ctrl-click is the platform gesture for "open this where it
     // actually lives" - it must bypass `openPrInApp` even though one is
-    // wired up, and go through the RunnerHost bridge instead.
-    const host = createRunnerHost();
-    const openExternalLink = vi
-      .spyOn(host, "openExternalLink")
-      .mockResolvedValue(undefined);
+    // wired up, and route through `openLink` instead.
     const opened: WorktreePrReference[] = [];
-    renderWithRunnerHost(
+    renderWithProviders(
       <WorktreePrPills
         worktrees={[worktree({})]}
         detailOnHover
@@ -489,28 +509,23 @@ describe("worktree PR metadata", () => {
         testId="history-prs"
         openPrInApp={(reference) => opened.push(reference)}
       />,
-      host,
     );
 
     const link = screen.getByRole("link", { name: "Open PR #42 Open" });
     const notCanceled = fireEvent.click(link, { metaKey: true });
 
     expect(opened).toHaveLength(0);
-    await vi.waitFor(() => {
-      expect(openExternalLink).toHaveBeenCalledExactlyOnceWith(
-        "https://github.com/acme/app/pull/42",
-      );
-    });
+    expect(openLink).toHaveBeenCalledExactlyOnceWith(
+      "https://github.com/acme/app/pull/42",
+      "github",
+      expect.anything(),
+    );
     expect(notCanceled).toBe(false);
   });
 
-  it("sends a ctrl-click straight to the host instead of the in-app PR view", async () => {
-    const host = createRunnerHost();
-    const openExternalLink = vi
-      .spyOn(host, "openExternalLink")
-      .mockResolvedValue(undefined);
+  it("sends a ctrl-click straight to openLink instead of the in-app PR view", () => {
     const opened: WorktreePrReference[] = [];
-    renderWithRunnerHost(
+    renderWithProviders(
       <WorktreePrPills
         worktrees={[worktree({})]}
         detailOnHover
@@ -519,43 +534,18 @@ describe("worktree PR metadata", () => {
         testId="history-prs"
         openPrInApp={(reference) => opened.push(reference)}
       />,
-      host,
     );
 
     const link = screen.getByRole("link", { name: "Open PR #42 Open" });
     const notCanceled = fireEvent.click(link, { ctrlKey: true });
 
     expect(opened).toHaveLength(0);
-    await vi.waitFor(() => {
-      expect(openExternalLink).toHaveBeenCalledExactlyOnceWith(
-        "https://github.com/acme/app/pull/42",
-      );
-    });
-    expect(notCanceled).toBe(false);
-  });
-
-  it("leaves a meta-click's default navigation alone when no runner host is attached", () => {
-    // With no RunnerHost bridge to hand the URL to, the handler must return
-    // without calling `preventDefault` - the anchor's own `target="_blank"`
-    // is the only thing left that can open it.
-    const opened: WorktreePrReference[] = [];
-    renderWithRunnerHost(
-      <WorktreePrPills
-        worktrees={[worktree({})]}
-        detailOnHover
-        maximumVisible={null}
-        className={undefined}
-        testId="history-prs"
-        openPrInApp={(reference) => opened.push(reference)}
-      />,
-      null,
+    expect(openLink).toHaveBeenCalledExactlyOnceWith(
+      "https://github.com/acme/app/pull/42",
+      "github",
+      expect.anything(),
     );
-
-    const link = screen.getByRole("link", { name: "Open PR #42 Open" });
-    const notCanceled = fireEvent.click(link, { metaKey: true });
-
-    expect(opened).toHaveLength(0);
-    expect(notCanceled).toBe(true);
+    expect(notCanceled).toBe(false);
   });
 
   it("keeps the owner-preview scroll root out of sequential focus inside a HoverCard", () => {
@@ -570,6 +560,7 @@ describe("worktree PR metadata", () => {
             binding={BINDING}
             worktrees={[entry]}
             workspaces={[]}
+            prReferences={[]}
             pending={false}
             hostUnavailable={false}
             error={false}
@@ -630,6 +621,7 @@ describe("worktree PR metadata", () => {
           binding={BINDING}
           worktrees={[entry]}
           workspaces={[]}
+          prReferences={worktreePrReferences([entry])}
           pending={false}
           hostUnavailable={false}
           error={false}
@@ -727,6 +719,94 @@ describe("worktree PR metadata", () => {
   });
 });
 
+describe("ownerPrReferences", () => {
+  it("keeps only items owned by the matching owner id and kind", () => {
+    const items: readonly PrLightItem[] = [
+      prLightItem({ owners: [{ ownerId: "owner-1", ownerKind: "chat" }] }),
+      prLightItem({
+        prUrl: "https://github.com/acme/app/pull/43",
+        base: { owner: "acme", repo: "app", prNumber: 43 },
+        owners: [{ ownerId: "owner-2", ownerKind: "chat" }],
+      }),
+      prLightItem({
+        prUrl: "https://github.com/acme/app/pull/44",
+        base: { owner: "acme", repo: "app", prNumber: 44 },
+        owners: [{ ownerId: "owner-1", ownerKind: "terminal-agent" }],
+      }),
+    ];
+
+    const references = ownerPrReferences(items, "owner-1", "chat");
+
+    expect(references.map((reference) => reference.prNumber)).toEqual([42]);
+  });
+
+  it("prefixes a submodule PR's label with its repo, and leaves a superproject PR bare", () => {
+    const items: readonly PrLightItem[] = [
+      prLightItem({ repoRole: "superproject" }),
+      prLightItem({
+        prUrl: "https://github.com/acme/shared/pull/7",
+        base: { owner: "acme", repo: "shared", prNumber: 7 },
+        repoRole: "submodule",
+        repoIdentifier: { owner: "acme", repo: "shared" },
+      }),
+    ];
+
+    const references = ownerPrReferences(items, "owner-1", "chat");
+
+    expect(references).toMatchObject([
+      { label: "#42", ariaLabel: "Open PR #42 Open" },
+      { label: "shared #7", ariaLabel: "Open shared PR #7 Open" },
+    ]);
+  });
+
+  it("carries linkGroupKey through as worktreePath, and empties it when null", () => {
+    const items: readonly PrLightItem[] = [
+      prLightItem({ linkGroupKey: "/worktrees/app/feature-login" }),
+      prLightItem({
+        prUrl: "https://github.com/acme/app/pull/43",
+        base: { owner: "acme", repo: "app", prNumber: 43 },
+        linkGroupKey: null,
+      }),
+    ];
+
+    const references = ownerPrReferences(items, "owner-1", "chat");
+
+    expect(references.map((reference) => reference.worktreePath)).toEqual([
+      "/worktrees/app/feature-login",
+      "",
+    ]);
+  });
+
+  it("dedupes two owned items that report the same PR url", () => {
+    // Unlike `worktreePrReferences`, dedup here happens across the epic's
+    // PR-list ITEMS directly, not across running directories - two items
+    // pointing at the same url (a superproject row and a since-merged
+    // duplicate sweep, say) must still collapse to one reference.
+    const items: readonly PrLightItem[] = [
+      prLightItem({ linkGroupKey: "/worktrees/app/feature-login" }),
+      prLightItem({ linkGroupKey: "/worktrees/app/feature-login-copy" }),
+    ];
+
+    const references = ownerPrReferences(items, "owner-1", "chat");
+
+    expect(references).toHaveLength(1);
+  });
+
+  it("drops an item with no base coordinates or no PR url", () => {
+    const items: readonly PrLightItem[] = [
+      prLightItem({ base: null }),
+      prLightItem({
+        prUrl: null,
+        base: { owner: "acme", repo: "app", prNumber: 43 },
+      }),
+    ];
+
+    const references = ownerPrReferences(items, "owner-1", "chat");
+
+    expect(references).toEqual([]);
+  });
+});
+
 /**
  * The three ways this block can have nothing to show, and why they must not
  * collapse into one message.
@@ -751,6 +831,7 @@ describe("owner workspace metadata empty states", () => {
         binding={null}
         worktrees={[]}
         workspaces={[]}
+        prReferences={[]}
         pending={props.pending}
         hostUnavailable={props.hostUnavailable}
         error={props.error}
@@ -795,6 +876,7 @@ describe("owner workspace metadata empty states", () => {
         binding={BINDING}
         worktrees={[]}
         workspaces={[]}
+        prReferences={[]}
         pending
         hostUnavailable={false}
         error={false}
@@ -806,5 +888,75 @@ describe("owner workspace metadata empty states", () => {
     expect(
       screen.getByTestId("owner-workspace-metadata-content"),
     ).toBeDefined();
+  });
+});
+
+describe("owner workspace metadata association references", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders an association reference for a plain-folder owner with no managed worktree", () => {
+    // Association references key off `item.runPath`, not `item.worktree` -
+    // a plain folder's `item.worktree` is always null (the worktree walk
+    // never sees it), which is exactly the case the old
+    // `item.worktree === null ? null : <WorktreePrPills .../>` gate dropped.
+    renderWithProviders(
+      <OwnerWorkspaceMetadataContent
+        binding={PLAIN_FOLDER_BINDING}
+        worktrees={[]}
+        workspaces={[
+          workspaceSummary("/repos/infra", [
+            diskEntry("/repos/infra", true, "main"),
+          ]),
+        ]}
+        prReferences={[
+          prReferenceFixture({
+            key: "worktree:9:https://github.com/acme/infra/pull/9",
+            label: "#9",
+            ariaLabel: "Open PR #9 Open",
+            prNumber: 9,
+            url: "https://github.com/acme/infra/pull/9",
+            repo: "infra",
+            branch: "main",
+            worktreePath: "/repos/infra",
+          }),
+        ]}
+        pending={false}
+        hostUnavailable={false}
+        error={false}
+        openPrInApp={null}
+      />,
+    );
+
+    const group = screen.getByTestId("owner-workspace-prs-/repos/infra");
+    expect(
+      within(group).getByRole("link", { name: "Open PR #9 Open" }),
+    ).toBeDefined();
+    expect(screen.queryByTestId("owner-unlinked-prs")).toBeNull();
+  });
+
+  it("still renders an association reference whose path matches no listed owner item", () => {
+    renderWithProviders(
+      <OwnerWorkspaceMetadataContent
+        binding={null}
+        worktrees={[]}
+        workspaces={[]}
+        prReferences={[
+          prReferenceFixture({ worktreePath: "/some/other/repo" }),
+        ]}
+        pending={false}
+        hostUnavailable={false}
+        error={false}
+        openPrInApp={null}
+      />,
+    );
+
+    expect(screen.getByText("Pull requests")).toBeDefined();
+    const group = screen.getByTestId("owner-unlinked-prs");
+    expect(
+      within(group).getByRole("link", { name: "Open PR #42 Open" }),
+    ).toBeDefined();
+    expect(screen.queryByText("No workspace linked")).toBeNull();
   });
 });

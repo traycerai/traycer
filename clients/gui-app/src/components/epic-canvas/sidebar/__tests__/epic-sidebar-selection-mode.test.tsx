@@ -632,6 +632,10 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
+  // The chat write-routing gate reads the session through the
+  // NON-throwing accessor. `null` here is the honest double: this suite
+  // mounts no epic store, and no session means no epic write path to gate.
+  useMaybeOpenEpicHandle: () => null,
   useOpenEpicHandle: () => {
     if (!testState.sessionReady) {
       throw new Error(
@@ -643,6 +647,11 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
       store: {
         getState: () => ({
           deleteArtifact: testState.localDeleteArtifact,
+          // The unread marker computes its variant from BOTH stores, reading
+          // the tree non-reactively through this handle so a body-write stamp
+          // cannot re-render the row. That makes `tree` part of the state this
+          // double has to carry.
+          tree: testState.tree,
           renameArtifact: vi.fn(),
           // The rename path stamps an optimistic overlay patch before firing
           // the RPC, and reads the stamp tombstone back on settle. An empty
@@ -659,43 +668,50 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
   },
 }));
 
+/** Records what the tile-open executor prepared, for the routing assertions. */
+function recordPreparedOpen(
+  _tabId: string,
+  ref: { type: string; id: string; hostId: string },
+): null {
+  testState.preparedOpenRefs.push({
+    type: ref.type,
+    id: ref.id,
+    hostId: ref.hostId,
+  });
+  return null;
+}
+
 vi.mock("@/stores/epics/canvas/store", () => ({
   findOpenArtifactInTab: () => null,
   useActiveEpicArtifactId: () => testState.activeArtifactId,
-  useEpicCanvasStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      closeCanvasTab: testState.closeCanvasTab,
-      markArtifactSelfDeleted: testState.markArtifactSelfDeleted,
-      openTileInTab: vi.fn(),
-      openTilePreviewInTab: vi.fn(),
-      prepareOpenTilePreviewInTabFocusTarget: (
-        _tabId: string,
-        ref: { type: string; id: string; hostId: string },
-      ) => {
-        testState.preparedOpenRefs.push({
-          type: ref.type,
-          id: ref.id,
-          hostId: ref.hostId,
-        });
-        return null;
-      },
-      prepareOpenTileInTabFocusTarget: (
-        _tabId: string,
-        ref: { type: string; id: string; hostId: string },
-      ) => {
-        testState.preparedOpenRefs.push({
-          type: ref.type,
-          id: ref.id,
-          hostId: ref.hostId,
-        });
-        return null;
-      },
-      pendingRootCreatesByEpic: {},
-      preAckRootCreatesByEpic: {},
-      promotePreviewInTab: vi.fn(),
-      renameArtifactInTab: vi.fn(),
-      unmarkArtifactSelfDeleted: testState.unmarkArtifactSelfDeleted,
-    }),
+  useEpicCanvasStore: Object.assign(
+    (selector: (state: unknown) => unknown) =>
+      selector({
+        closeCanvasTab: testState.closeCanvasTab,
+        markArtifactSelfDeleted: testState.markArtifactSelfDeleted,
+        openTilePreviewInTab: vi.fn(),
+        pendingRootCreatesByEpic: {},
+        preAckRootCreatesByEpic: {},
+        promotePreviewInTab: vi.fn(),
+        renameArtifactInTab: vi.fn(),
+        unmarkArtifactSelfDeleted: testState.unmarkArtifactSelfDeleted,
+      }),
+    {
+      // `openTileWithNavigation` reads the store imperatively: `canvasByTabId`
+      // for the resolver, `tabsById[tabId].epicId` to decide whether to wrap
+      // the prepare in `navigateNested`, and the `*FromSource` actions the
+      // executor dispatches into. Only the boundary functions are exposed -
+      // never a raw `openTileInTab` - so a regression to a direct canvas
+      // mutation throws instead of silently passing.
+      getState: () => ({
+        canvasByTabId: {},
+        tabsById: { [TAB_ID]: { epicId: EPIC_ID } },
+        prepareOpenTileInTabFocusTargetFromSource: recordPreparedOpen,
+        prepareOpenTilePreviewInTabFocusTargetFromSource: recordPreparedOpen,
+        prepareOpenTileInBackgroundTabFocusTargetFromSource: recordPreparedOpen,
+      }),
+    },
+  ),
   useIsActiveEpicArtifact: () => false,
   useOpenTileContentIds: () => testState.openTileContentIds,
 }));
@@ -883,6 +899,13 @@ vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: unknown) => unknown) =>
     selector({
       snapshotLoaded: testState.snapshotLoaded,
+      // The tree index, because the row-level tree reads subscribe HERE now
+      // rather than through `useEpicTreeIndex`. A row that used to take the
+      // whole slice re-rendered on every record change; it now selects its own
+      // answer out of the store, so this fake has to carry what production
+      // reads. Same object the `epic-selectors` fake hands back, so the two
+      // mocks cannot disagree about the shape of the tree.
+      tree: testState.tree,
       artifacts: {
         allIds: testState.records
           .filter((record) => record.type !== "chat")
@@ -989,20 +1012,31 @@ vi.mock("@/stores/epics/artifact-read-state-store", () => ({
   useArtifactReadStateStore: useArtifactReadStateStoreMock,
 }));
 
-vi.mock("@/stores/settings/settings-store", () => ({
-  useSettingsStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      artifactIconColorMode: "none",
-      artifactIconColors: {
-        chat: undefined,
-        review: undefined,
-        spec: undefined,
-        story: undefined,
-        ticket: undefined,
-        "terminal-agent": undefined,
-      },
-    }),
-}));
+// `importOriginal` keeps the real `tilePlacement` defaults: a row click runs
+// the real `openTile` seam, which reads placement off `getState()`.
+vi.mock("@/stores/settings/settings-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/settings/settings-store")>();
+  const state = {
+    artifactIconColorMode: "none",
+    artifactIconColors: {
+      chat: undefined,
+      review: undefined,
+      spec: undefined,
+      story: undefined,
+      ticket: undefined,
+      "terminal-agent": undefined,
+    },
+    tilePlacement: actual.DEFAULT_TILE_PLACEMENT_SETTINGS,
+  };
+  return {
+    ...actual,
+    useSettingsStore: Object.assign(
+      (selector: (settingsState: typeof state) => unknown) => selector(state),
+      { getState: () => state },
+    ),
+  };
+});
 
 import {
   EpicLeftPanelHost,
@@ -1012,6 +1046,7 @@ import {
   BASE_PAD_LEFT,
   INDENT_PX,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const TAB_ID = "tab-1";
 const EPIC_ID = "epic-1";
@@ -3149,6 +3184,7 @@ const createdSessionHandles: ChatSessionStoreHandle[] = [];
  */
 function createSessionHandle(chatId: string): ChatSessionStoreHandle {
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId,
@@ -3184,6 +3220,7 @@ function runningShell(chatId: string): ManagedCommand {
     cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
     status: { state: "running", pid: 4242, startedAtMs: 1 },
     chatId,
+    relaunchOnHostRestart: false,
     createdAtMs: 1,
     updatedAtMs: 1,
   };
@@ -3971,7 +4008,7 @@ describe("chat row archive", () => {
 
   // --- rename settles the editor on COMMIT, not on the ack ----------------
 
-  it("closes the rename input on commit while the rename RPC is still in flight", () => {
+  it("closes the rename input on commit while the rename RPC is still in flight", async () => {
     seedChatTree();
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
@@ -3989,8 +4026,15 @@ describe("chat row archive", () => {
       "chat-root",
       "Renamed while in flight",
     );
-    expect(testState.renameChatMutateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Renamed while in flight" }),
+    // AWAITED: `beginRenameMutation` is a bridge round trip, so the RPC it
+    // gates is issued a microtask after the key event rather than inside it.
+    // The stamp assertion above still reads synchronously - that call IS made
+    // on the event - which is what makes this a delivery boundary rather than
+    // a wholesale change of when the commit starts.
+    await waitFor(() =>
+      expect(testState.renameChatMutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Renamed while in flight" }),
+      ),
     );
     expect(testState.retirePendingMutation).not.toHaveBeenCalled();
     expect(
@@ -3998,7 +4042,7 @@ describe("chat row archive", () => {
     ).toBeNull();
   });
 
-  it("issues a second rename committed while the first is still in flight", () => {
+  it("issues a second rename committed while the first is still in flight", async () => {
     seedChatTree();
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
@@ -4031,7 +4075,10 @@ describe("chat row archive", () => {
       "chat-root",
       "Second title",
     );
-    expect(testState.renameChatMutateAsync).toHaveBeenCalledTimes(2);
+    // AWAITED for the reason the in-flight pin above states.
+    await waitFor(() =>
+      expect(testState.renameChatMutateAsync).toHaveBeenCalledTimes(2),
+    );
     expect(testState.renameChatMutateAsync).toHaveBeenLastCalledWith(
       expect.objectContaining({ title: "Second title" }),
     );

@@ -1,9 +1,9 @@
 import { useCallback, useMemo } from "react";
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import type { GitChangedFile } from "@traycer/protocol/host";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import { makeGitFileDiffTileForFile } from "@/lib/git/git-diff-tile";
 import type { GitDiffRepositoryContext } from "@/stores/epics/canvas/types";
 import { gitChangedFileTooltipContent } from "@/lib/git/panel-file-rendering";
@@ -32,13 +32,7 @@ export interface FileRowProps {
 }
 
 export function FileRow(props: FileRowProps): ReactNode {
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTilePreviewInTabFocusTarget,
-  );
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   const tile = useMemo(
     () =>
       makeGitFileDiffTileForFile({
@@ -50,29 +44,35 @@ export function FileRow(props: FileRowProps): ReactNode {
     [props.hostId, props.file, props.repositoryContext, props.runningDir],
   );
 
-  const onClick = useCallback(() => {
-    navigateNested(props.epicId, props.viewTabId, () =>
-      prepareOpenTilePreviewInTabFocusTarget(props.viewTabId, tile),
-    );
-  }, [
-    navigateNested,
-    prepareOpenTilePreviewInTabFocusTarget,
-    props.epicId,
-    props.viewTabId,
-    tile,
-  ]);
+  const onClick = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      openTile({
+        node: tile,
+        target: { tabId: props.viewTabId },
+        gesture: "single",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
+    },
+    [openTile, props.viewTabId, tile],
+  );
 
-  const onDoubleClick = useCallback(() => {
-    navigateNested(props.epicId, props.viewTabId, () =>
-      prepareOpenTileInTabFocusTarget(props.viewTabId, tile),
-    );
-  }, [
-    navigateNested,
-    prepareOpenTileInTabFocusTarget,
-    props.epicId,
-    props.viewTabId,
-    tile,
-  ]);
+  const onDoubleClick = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      openTile({
+        node: tile,
+        target: { tabId: props.viewTabId },
+        gesture: "double",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
+    },
+    [openTile, props.viewTabId, tile],
+  );
 
   const dragData = useMemo<EpicCanvasGitDiffTileDragData>(
     () => ({

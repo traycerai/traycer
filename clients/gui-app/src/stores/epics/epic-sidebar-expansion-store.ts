@@ -32,6 +32,11 @@ import type { RootCreatePanelId } from "@/stores/epics/left-panel-store";
 
 const EMPTY_SET: ReadonlySet<string> = new Set<string>();
 
+const EMPTY_ROOT_IDS: readonly string[] = [];
+// Node ids are uuid-shaped, so NUL can never appear inside one and cannot split
+// a key across two ids.
+const ROOT_ID_KEY_SEPARATOR = "\u0000";
+
 const SCOPE_SEPARATOR = "::";
 
 // tabIds are uuids and panelIds are fixed slugs, so this separator never
@@ -217,15 +222,44 @@ export function useEpicSidebarEffectiveExpanded(
   // Memoize the derived Set on its inputs. Without this, `deriveEffectiveExpanded`
   // allocates a fresh `Set` on every render, so the expansion controller built
   // from it gets a new identity every render and defeats memoized tree nodes.
+  // ...but memoizing on the INPUTS is not enough, because `rootIds` is ORDERED
+  // and this result is not.
+  //
+  // The projector sorts roots by recency (`makeNodeComparator(DEFAULT_SORT_MODE)`),
+  // so a body-write burst that stamps `updatedAt` on some artifacts genuinely
+  // reorders `rootIds` while leaving its membership alone. That reorder is a
+  // real change and the list must re-render in the new order - but this
+  // derivation only ever ADDS those ids to a Set, where order carries no
+  // meaning. Left keyed on the array, an order-only difference re-mints the
+  // set, which re-mints `toggleExpanded` and the `expansion` controller, and
+  // every memoized row in the panel re-renders. Rows keyed by id should MOVE on
+  // a reorder, not re-render.
+  //
+  // So depend on the MEMBERSHIP rather than post-filtering the output: a
+  // canonical key, and a members array rebuilt only when that key changes.
+  // Holding the previous Set behind a ref would work too, but React's rules
+  // rightly forbid reading a ref during render, and this states the actual
+  // invariant - the result is a function of which roots exist, not their order.
+  const rootIdsKey = useMemo(
+    () => [...rootIds].sort().join(ROOT_ID_KEY_SEPARATOR),
+    [rootIds],
+  );
+  const rootIdMembers = useMemo(
+    () =>
+      rootIdsKey === ""
+        ? EMPTY_ROOT_IDS
+        : rootIdsKey.split(ROOT_ID_KEY_SEPARATOR),
+    [rootIdsKey],
+  );
   return useMemo(
     () =>
       deriveEffectiveExpanded(
         userExpanded,
         userCollapsed,
-        rootIds,
+        rootIdMembers,
         ancestorIds,
       ),
-    [userExpanded, userCollapsed, rootIds, ancestorIds],
+    [userExpanded, userCollapsed, rootIdMembers, ancestorIds],
   );
 }
 function deriveEffectiveExpanded(

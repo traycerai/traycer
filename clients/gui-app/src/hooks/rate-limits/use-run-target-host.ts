@@ -35,9 +35,8 @@ export interface RunTargetHost {
  * trio every profile-usage-comparison hook needs, all derived from the SAME
  * `useHostClientForHostId` resolution so they can never disagree about which
  * host is being observed. `useHostClientForHostId` never substitutes the
- * default host for a non-null `runTargetHostId`, so an unreachable tab host
- * resolves to a `null` client (and therefore a `null` queueScope and
- * `isReady: false`) rather than silently falling back.
+ * default host for a non-null `runTargetHostId`: an unresolved tab host keeps
+ * an identity requester, but has no ready queue scope until its row appears.
  */
 export function useRunTargetHost(
   runTargetHostId: string | null,

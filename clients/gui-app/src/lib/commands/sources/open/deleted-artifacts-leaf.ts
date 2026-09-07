@@ -9,7 +9,7 @@
  * Routed through the singleton opener delegate so selecting the row again
  * focuses the existing recovery tile instead of opening a duplicate.
  */
-import { openSingletonTileIntoTargetGroup } from "@/lib/commands/actions";
+import { openTileIntoTargetGroup } from "@/lib/commands/actions";
 import { openerActionLeaf } from "@/lib/commands/sources/open/open-leaf";
 import { makeDeletedArtifactsTileRef } from "@/stores/epics/canvas/tile-schema/deleted-artifacts-tile";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
@@ -32,10 +32,13 @@ export function deletedArtifactsOpenerItem(
     run: () => {
       const epicId = ctx.activeEpicId;
       if (epicId === null) return;
-      openSingletonTileIntoTargetGroup({
+      openTileIntoTargetGroup({
         tabId: ctx.activeTabId,
         groupId: ctx.targetGroupId,
         ref: makeDeletedArtifactsTileRef(epicId, hostId),
+        // SINGLETON: one recovery surface per epic/host, so selecting the row
+        // again focuses the existing tile instead of minting a duplicate.
+        dedupe: true,
         navigateNestedFocus: ctx.router.navigateNestedFocus,
       });
     },

@@ -12,9 +12,11 @@ import type {
   CertificateTrustScope,
   LogLevel,
   LogLevelScope,
+  HostKeyPinMismatch,
   LogLevelsSnapshot,
   PendingCertificateError,
   ProcessMetricsSnapshot,
+  RendererJsHeapBreakdown,
   TrustedCertificateEntry,
   Vibrancy,
 } from "../ipc-contracts/platform-types";
@@ -26,9 +28,11 @@ export type {
   BackgroundMaterial,
   DisplaySnapshot,
   DisplayTopology,
+  HostKeyPinMismatch,
   InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
+  RendererJsHeapBreakdown,
   TrustedCertificateEntry,
   Vibrancy,
 } from "../ipc-contracts/platform-types";
@@ -62,6 +66,7 @@ export interface PlatformBridgeSurface {
   diagnostics: {
     getMetrics(): Promise<ProcessMetricsSnapshot>;
     takeHeapSnapshot(): Promise<string | null>;
+    measureJsHeaps(): Promise<RendererJsHeapBreakdown | null>;
     traceStart(): Promise<boolean>;
     traceStop(): Promise<string | null>;
   };
@@ -105,6 +110,10 @@ export interface PlatformBridgeSurface {
     dismissPending(id: string): Promise<void>;
     showSystemDialog(certificate: unknown, message: string): Promise<boolean>;
     onPending(handler: Listener<PendingCertificateError>): Disposable;
+  };
+  hostKeyPin: {
+    /** Fires when main refused a host whose static key changed (H11). */
+    onMismatch(handler: Listener<HostKeyPinMismatch>): Disposable;
   };
   display: {
     list(): Promise<DisplayTopology>;
@@ -193,6 +202,10 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
         ipcRenderer.invoke(
           RunnerHostInvoke.diagnosticsTakeHeapSnapshot,
         ) as Promise<string | null>,
+      measureJsHeaps: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.diagnosticsMeasureJsHeaps,
+        ) as Promise<RendererJsHeapBreakdown | null>,
       traceStart: () =>
         ipcRenderer.invoke(
           RunnerHostInvoke.diagnosticsTraceStart,
@@ -299,6 +312,10 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
         ) as Promise<boolean>,
       onPending: (handler) =>
         subscribe(RunnerHostEvent.certificateErrorPending, handler),
+    },
+    hostKeyPin: {
+      onMismatch: (handler) =>
+        subscribe(RunnerHostEvent.hostKeyPinMismatch, handler),
     },
     display: {
       list: () =>

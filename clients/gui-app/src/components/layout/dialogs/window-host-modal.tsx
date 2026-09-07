@@ -17,6 +17,7 @@ import {
   type WindowNarrationCause,
   type WindowNarrationVariant,
 } from "@/lib/host/window-narration";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 /**
  * THE window narrator (D10, C4, M5): one global surface for the two facts that
@@ -116,6 +117,7 @@ export interface WindowHostModalProps {
 
 export function WindowHostModal(props: WindowHostModalProps): ReactNode {
   const copy = modalCopy(props.variant, props.cause);
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
   return (
     <DialogPrimitive.Root open modal>
       <DialogPrimitive.Portal>
@@ -125,6 +127,7 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
           className="fixed inset-0 isolate z-[60] bg-black/40 duration-100 supports-backdrop-filter:backdrop-blur-sm data-open:animate-in data-open:fade-in-0"
         />
         <DialogPrimitive.Content
+          ref={registerOverlayRef}
           data-slot="dialog-content"
           data-testid="window-host-modal"
           data-variant={props.variant.kind}

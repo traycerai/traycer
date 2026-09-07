@@ -242,6 +242,7 @@ function createBaseRunnerHost(): IRunnerHost {
     getRegisteredUrlSchemes: () => Promise.resolve([]),
     requestMicrophoneAccess: () => Promise.resolve("granted" as const),
     openMicrophoneSettings: () => Promise.resolve(),
+    openFullDiskAccessSettings: () => Promise.resolve(),
     beginAuthAttempt: () => undefined,
     onAuthCallback: () => ({ dispose: () => undefined }),
     deviceFlow: { start: () => Promise.resolve(null) },
@@ -825,7 +826,9 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(
         screen.queryByRole("switch", { name: "Include App log tail" }),
       ).toBeNull();
-      expect(screen.getByText(/log tails on/)).not.toBeNull();
+      // "partially": the two log tails default on, browser diagnostics does
+      // not (root cause H - it is opt-in per report).
+      expect(screen.getByText(/log tails partially on/)).not.toBeNull();
     });
 
     it("defaults log toggles OFF for idea/other and back ON for bug unless the user already touched them (D8)", async () => {
@@ -847,10 +850,14 @@ describe("Report issue capture dialog (deep interactions)", () => {
       fireEvent.click(screen.getByRole("radio", { name: "Idea" }));
       expect(switchState("Include App log tail")).toBe("unchecked");
       expect(switchState("Include Host log tail")).toBe("unchecked");
+      expect(switchState("Include browser diagnostics")).toBe("unchecked");
 
       fireEvent.click(screen.getByRole("radio", { name: "Bug" }));
       expect(switchState("Include App log tail")).toBe("checked");
       expect(switchState("Include Host log tail")).toBe("checked");
+      // NOT re-armed by the type switch: browser diagnostics is opt-in on
+      // every report type, so only the user's own toggle turns it on.
+      expect(switchState("Include browser diagnostics")).toBe("unchecked");
 
       // User-touched toggle must not be clobbered by a later type switch.
       fireEvent.click(
@@ -861,6 +868,59 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(switchState("Include App log tail")).toBe("unchecked");
       fireEvent.click(screen.getByRole("radio", { name: "Bug" }));
       expect(switchState("Include App log tail")).toBe("unchecked");
+    });
+
+    it("shows 'log tails off' in the collapsed summary once Idea clears the two log tails", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      // Collapsed, still "Bug": the two log tails default on, browser
+      // diagnostics does not.
+      expect(screen.getByText(/log tails partially on/)).not.toBeNull();
+
+      fireEvent.click(screen.getByRole("radio", { name: "Idea" }));
+      expect(screen.getByText(/log tails off/)).not.toBeNull();
+      expect(screen.queryByText(/log tails partially on/)).toBeNull();
+    });
+
+    it("keeps a browser diagnostics toggle the user turned ON across a type switch", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.click(screen.getByRole("button", { name: "details" }));
+      expect(switchState("Include browser diagnostics")).toBe("unchecked");
+
+      // Touch ONLY the browser diagnostics toggle - not desktop/host.
+      fireEvent.click(
+        screen.getByRole("switch", { name: "Include browser diagnostics" }),
+      );
+      expect(switchState("Include browser diagnostics")).toBe("checked");
+
+      // A later type switch must not clobber the user's own opt-in: the
+      // type defaults speak for the desktop/host logs only, and browser
+      // diagnostics is opt-in on every report.
+      fireEvent.click(screen.getByRole("radio", { name: "Idea" }));
+      expect(switchState("Include browser diagnostics")).toBe("checked");
+      fireEvent.click(screen.getByRole("radio", { name: "Bug" }));
+      expect(switchState("Include browser diagnostics")).toBe("checked");
     });
 
     it("submits includeDesktopLog/includeHostLog:false when the user toggles logs off", async () => {
@@ -892,6 +952,39 @@ describe("Report issue capture dialog (deep interactions)", () => {
       const form = lastSubmittedForm(harness);
       expect(form.includeDesktopLog).toBe(false);
       expect(form.includeHostLog).toBe(false);
+    });
+
+    // Ticket 03 / plan D3: one switch covers both browser diagnostic files.
+    // Unlike the other two log toggles it starts OFF on every report type
+    // (root cause H): `browser-trace.jsonl` records the agent's cell source
+    // and every page it drove, so it is opt-in per report rather than
+    // opted-out - and the toggle-on has to reach the wire.
+    it("defaults includeBrowserDiagnostics off and submits true only when the user turns it on", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.click(screen.getByRole("button", { name: "details" }));
+      expect(switchState("Include browser diagnostics")).toBe("unchecked");
+      fireEvent.click(
+        screen.getByRole("switch", { name: "Include browser diagnostics" }),
+      );
+      fireEvent.change(bugIntentField(), {
+        target: { value: "Browser diagnostics were opted in" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+
+      await screen.findByRole("heading", { name: "Report sent" });
+      const form = lastSubmittedForm(harness);
+      expect(form.includeBrowserDiagnostics).toBe(true);
     });
 
     it("wires the diagnostics toggle and G1 contact checkbox into the submitted request", async () => {
@@ -1876,17 +1969,26 @@ describe("Report issue capture dialog (deep interactions)", () => {
       ).not.toBeNull();
     });
 
-    it("keeps the preview on openExternalLink failure with a retryable toast", async () => {
+    it("keeps the preview when the final draft rebuild fails, with a retryable toast", async () => {
+      // One of the two steps that can fail with the report still in hand: the
+      // REBUILD that folds the edited title back through the scrubbing
+      // pipeline (the other is the OS handoff, below).
+      let builds = 0;
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
         submitReport: () =>
           Promise.resolve({ status: "delivered", reportId: "rpt_openfail" }),
-        buildPublicDraft: undefined,
-        openExternalLink: () => Promise.reject(new Error("no browser")),
+        buildPublicDraft: (form) => {
+          builds += 1;
+          return builds === 1
+            ? Promise.resolve(publicDraftForForm(form))
+            : Promise.reject(new Error("no draft"));
+        },
+        openExternalLink: undefined,
         frozenDesktopLines: undefined,
         frozenHostLines: undefined,
       });
-      await reachConfirmedPreview(harness, "Open failure stays on preview");
+      await reachConfirmedPreview(harness, "Rebuild failure stays on preview");
 
       fireEvent.click(
         screen.getByRole("button", { name: "Open GitHub draft" }),
@@ -1900,13 +2002,43 @@ describe("Report issue capture dialog (deep interactions)", () => {
       });
       const openError = lastToastErrorOptions();
       expect(openError.description).toBe(
-        "Your report is safe - you can try opening it again. no browser",
+        "Your report is safe - you can try opening it again. no draft",
       );
       expect(openError.actionLabel).toBe("Try again");
       expect(
         screen.getByRole("heading", { name: "Preview the public issue" }),
       ).not.toBeNull();
       expect(harness.openedLinks).toEqual([]);
+    });
+
+    it("keeps the preview when the OS handoff itself fails (L1)", async () => {
+      // `openLink` is awaited, so a refused handoff rejects the mutation and
+      // `onError` keeps the preview with its retry - never the confirmation.
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: () =>
+          Promise.resolve({ status: "delivered", reportId: "rpt_handoff" }),
+        buildPublicDraft: undefined,
+        openExternalLink: () => Promise.reject(new Error("no browser")),
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      await reachConfirmedPreview(harness, "Handoff failure stays on preview");
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open GitHub draft" }),
+      );
+
+      await waitFor(() => {
+        expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+          "Could not open the GitHub draft",
+          expect.anything(),
+        );
+      });
+      expect(lastToastErrorOptions().actionLabel).toBe("Try again");
+      expect(
+        screen.getByRole("heading", { name: "Preview the public issue" }),
+      ).not.toBeNull();
     });
 
     it("routes an idea-type report through feature_request.yml fields and template param", async () => {

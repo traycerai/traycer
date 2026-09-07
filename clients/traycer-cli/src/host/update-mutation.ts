@@ -15,6 +15,7 @@ import {
   verifyServiceMutationAuthority,
   withServiceMutationAuthority,
 } from "../service/mutation-authority";
+import { didServiceRegistrationCommit } from "../service/cli-invocation-record";
 import { publishHostStartAdoption } from "./host-start-adoption";
 import type {
   DesktopRegistrationTakeover,
@@ -236,6 +237,16 @@ async function runWithHostStartAdoption(
     await verifyServiceMutationAuthority();
     await start();
     await adoption.waitForSpawn();
+  } catch (error) {
+    // A record-step failure after the service manager accepted the
+    // registration means the supervisor is already launching and will present
+    // this lease; cancelling first would refuse an admitted child. Honour the
+    // lease, then surface the record error unchanged (a failed wait must not
+    // replace it - see the cleanup rule below).
+    if (didServiceRegistrationCommit(error)) {
+      await adoption.waitForSpawn().catch(() => undefined);
+    }
+    throw error;
   } finally {
     // Cleanup must never replace the actuator error: callers classify it to
     // choose between park/abort and an ordinary busy refusal, and a rejected

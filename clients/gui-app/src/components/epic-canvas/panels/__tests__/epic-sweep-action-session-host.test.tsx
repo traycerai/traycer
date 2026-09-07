@@ -33,7 +33,6 @@ const captured = vi.hoisted<{
   flowProps: {
     surfaceHostClient: unknown;
     surfaceHostId: string | null;
-    occupiedHostIds: ReadonlySet<string>;
   }[];
 }>(() => ({ metadataClients: [], flowProps: [] }));
 
@@ -80,13 +79,11 @@ vi.mock("@/components/epics/sweep-worktrees-flow", () => ({
     readonly epicIds: ReadonlyArray<string> | null;
     readonly surfaceHostClient: unknown;
     readonly surfaceHostId: string | null;
-    readonly occupiedHostIds: ReadonlySet<string>;
   }) => {
     if (props.epicIds !== null) {
       captured.flowProps.push({
         surfaceHostClient: props.surfaceHostClient,
         surfaceHostId: props.surfaceHostId,
-        occupiedHostIds: props.occupiedHostIds,
       });
     }
     return null;
@@ -136,7 +133,6 @@ describe("EpicSweepAction resolves through the Epic session host", () => {
     for (const props of captured.flowProps) {
       expect(props.surfaceHostClient).toBe(clients.session);
       expect(props.surfaceHostId).toBe(SESSION_HOST_ID);
-      expect([...props.occupiedHostIds]).toEqual([SESSION_HOST_ID]);
     }
   });
 
@@ -149,12 +145,9 @@ describe("EpicSweepAction resolves through the Epic session host", () => {
     expect(button.getAttribute("aria-disabled")).toBeNull();
     expect(button.getAttribute("aria-label")).toBe("Sweep worktrees");
     fireEvent.click(button);
+    // The node provenance only GATES the affordance now; the popover asks
+    // each host for its own count instead of carrying a badge hint.
     expect(captured.flowProps.length).toBeGreaterThan(0);
-    // The badge hint travels with it, so the picker can mark host-b.
-    expect([...captured.flowProps[0].occupiedHostIds].sort()).toEqual([
-      SESSION_HOST_ID,
-      "host-b",
-    ]);
   });
 
   it("stays faded when nothing anywhere names a host other than the session's", () => {

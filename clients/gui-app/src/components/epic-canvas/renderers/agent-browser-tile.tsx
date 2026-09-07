@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import type {
+  BrowserSessionProfileKind,
+  BrowserTabDriver,
+} from "@traycer/protocol/host/browser/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
@@ -12,7 +16,10 @@ import {
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
 import { BrowserViewSnapshotLayer } from "@/components/epic-canvas/renderers/browser-view-snapshot-layer";
-import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import {
+  useMaybeBrowserSessionsContext,
+  type BrowserSessionsState,
+} from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { PRIMARY_TILE_CHROME_CAPABILITIES } from "@/components/epic-canvas/renderers/tile-controller";
 import { useBrowserAnnotationSession } from "@/hooks/browser/use-browser-annotation-session";
 import { useBrowserViewSnapshot } from "@/components/epic-canvas/renderers/use-browser-view-snapshot";
@@ -29,17 +36,21 @@ import type {
   BrowserViewTileKey,
   BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
+import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
-} from "@/lib/browser-view/sessions/electron-tabs";
-import { openBrowserSessionTileFromPage } from "@/lib/browser-view/link-routing/browser-link-routing-core";
-import { useBrowserCookieCryptoState } from "@/lib/browser-view/use-browser-cookie-crypto-state";
+} from "@/lib/browser-view/sessions/electron-tab-directory";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import type { TileOpenTarget } from "@/lib/canvas/tile-open/intent";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { convertBrowserTabToPip } from "@/lib/browser-view/pip/pip-store";
-import { DEFAULT_BROWSER_TILE_URL } from "@/stores/epics/canvas/tile-schema/browser-tile";
+import {
+  DEFAULT_BROWSER_TILE_URL,
+  makeBrowserSessionTileRef,
+} from "@/stores/epics/canvas/tile-schema/browser-tile";
 
 interface ElectronTabSurfaceNode {
   readonly id: string;
@@ -63,6 +74,32 @@ interface SurfaceAttachmentState {
   readonly registrationId: string;
   readonly status: "ready" | "error";
   readonly error: string | null;
+}
+
+interface AgentTileSessionFacts {
+  /**
+   * The host's session record is the only source for the profile; a tile
+   * cannot infer a private session from its own state, and a tile whose
+   * session is not in the context yet is treated as primary.
+   */
+  readonly profile: BrowserSessionProfileKind;
+  readonly drivenBy: readonly BrowserTabDriver[];
+}
+
+/**
+ * Kept extracted rather than inlined into {@link ElectronTabSurface}: folding
+ * these lookups back into that component puts it over the complexity budget,
+ * which is the objective signal that the extraction is carrying its weight.
+ */
+function agentTileSessionFacts(
+  sessions: BrowserSessionsState | null,
+  sessionId: string,
+  tabId: string,
+): AgentTileSessionFacts {
+  const session = sessions?.items.find((item) => item.sessionId === sessionId);
+  if (session === undefined) return { profile: "primary", drivenBy: [] };
+  const tab = session.tabs.find((item) => item.tabId === tabId);
+  return { profile: session.profile, drivenBy: tab?.drivenBy ?? [] };
 }
 
 /**
@@ -92,6 +129,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     visible,
   });
   const browserSessions = useMaybeBrowserSessionsContext();
+  const { openTile } = useEpicTileNavigation();
   const epicId = useEpicCanvasStore(
     (state) => state.tabsById[props.viewTabId]?.epicId ?? null,
   );
@@ -101,14 +139,12 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     props.node.url,
   );
   const showStartPage = startPageEpicId !== null;
-  const annotationSession = browserSessions?.items.find(
-    (item) => item.sessionId === props.node.sessionId,
+  const { profile: sessionProfile, drivenBy } = agentTileSessionFacts(
+    browserSessions,
+    props.node.sessionId,
+    props.binding.tabId,
   );
-  const annotationTab = annotationSession?.tabs.find(
-    (item) => item.tabId === props.binding.tabId,
-  );
-  const annotationDriverChatId = annotationTab?.drivenBy.at(-1)?.chatId ?? null;
-  const annotationPreferredChatId = annotationDriverChatId;
+  const annotationPreferredChatId = drivenBy.at(-1)?.chatId ?? null;
 
   const tileKey = useMemo<BrowserViewTileKey>(
     () => ({
@@ -188,31 +224,38 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     props.binding.tabId,
   ]);
 
-  useEffect(() => {
-    if (browserView === null) return;
-    const subscription = browserView.onOpenTileRequest((change) => {
-      if (!isSameBrowserViewTile(change, tileKey)) return;
+  /** Open a tab in this tile's session and place it beside this tile. */
+  const openTabBesideThisTile = useCallback(
+    (url: string, disposition: "foreground" | "background") => {
       if (
         browserSessions === null ||
         browserSessions.lifecycle !== "live" ||
         browserSessions.hostId !== props.node.hostId
       ) {
-        toast.error("Browsers are not connected yet.");
+        toast.error(browserSessionsRefusal(browserSessions));
         return;
       }
       void browserSessions
-        .openTab(props.node.sessionId, change.url)
+        .openTab(props.node.sessionId, url)
         .then((opened) => {
-          openBrowserSessionTileFromPage({
-            viewTabId: props.viewTabId,
-            paneId: props.paneId,
-            hostId: props.node.hostId,
-            sessionId: opened.sessionId,
-            tabId: opened.tabId,
-            url: change.url,
-            // Electron-only surface: a natively-placed tab exists on the
-            // desktop canvas alone, which always has room beside it.
-            placement: "split-right",
+          // Browser semantics, never the placement setting (A4): the popup is
+          // a tab of THIS pane's session, and a background disposition
+          // (middle/ctrl/cmd-click) leaves the current tab active.
+          openTile({
+            node: makeBrowserSessionTileRef({
+              hostId: props.node.hostId,
+              sessionId: opened.sessionId,
+              tabId: opened.tabId,
+            }),
+            // Resolved after the await, not before: the view tab can close
+            // while `openTab` is in flight, and opening into a closed tab id
+            // mutates a canvas with no route (R8).
+            target: currentPopupTarget(props.viewTabId, epicId),
+            gesture: disposition === "background" ? "host" : "explicit",
+            modifiers: null,
+            placement: { kind: "tab", paneId: props.paneId, index: null },
+            dedupe: true,
+            source: "direct_ui",
           });
         })
         .catch((cause: unknown) => {
@@ -222,19 +265,28 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
               : "Couldn't open the browser tab.",
           );
         });
+    },
+    [
+      browserSessions,
+      epicId,
+      openTile,
+      props.node.hostId,
+      props.node.sessionId,
+      props.paneId,
+      props.viewTabId,
+    ],
+  );
+
+  useEffect(() => {
+    if (browserView === null) return;
+    const subscription = browserView.onOpenTileRequest((change) => {
+      if (!isSameBrowserViewTile(change, tileKey)) return;
+      openTabBesideThisTile(change.url, change.disposition);
     });
     return () => {
       subscription.dispose();
     };
-  }, [
-    browserSessions,
-    browserView,
-    props.node.hostId,
-    props.node.sessionId,
-    props.paneId,
-    props.viewTabId,
-    tileKey,
-  ]);
+  }, [browserView, openTabBesideThisTile, tileKey]);
 
   const attachedBrowserView = surfaceReady ? browserView : null;
   useBrowserViewBoundsBridge({
@@ -244,7 +296,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     visible,
   });
   const snapshot = useBrowserViewSnapshot(tileKey);
-  const cookieCryptoState = useBrowserCookieCryptoState(browserView);
   const annotation = useBrowserAnnotationSession({
     browserView: showStartPage ? null : browserView,
     tileKey,
@@ -268,13 +319,13 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     attemptedNavigationRef.current = next;
   }, []);
   const chrome = useElectronTabChrome({
+    profile: sessionProfile,
     control: props.binding.control,
     surfaceServices: attachedBrowserView,
     tileKey,
     initialUrl: props.node.url,
     capabilities: chromeCapabilities,
     annotation,
-    cookieCryptoState,
     statusUrl,
     canGoBack,
     canGoForward,
@@ -285,6 +336,65 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     initialViewportPreset: props.node.viewportPreset,
     onAttemptedUrl: latchAttemptedUrl,
   });
+
+  // Browser-scoped reserved chords: main claimed the keystroke from the guest
+  // page (the app renderer never sees it) and named what the browser should
+  // do. The policy table lives in
+  // `@/lib/browser-view/reserved-chords-registration`.
+  const {
+    controller: chromeController,
+    navigateToUrl,
+    downloads,
+    cancelDownload,
+    certificateError,
+    certificateProceeding,
+    proceedCertificate,
+  } = chrome;
+  const focusAddress = chromeController.focusAddress;
+  useEffect(() => {
+    if (browserView === null) return;
+    const subscription = browserView.onTileCommand((event) => {
+      if (!isSameBrowserViewTile(event, tileKey)) return;
+      switch (event.command) {
+        case "newTab":
+          openTabBesideThisTile(DEFAULT_BROWSER_TILE_URL, "foreground");
+          return;
+        case "focusAddressBar":
+          focusAddress();
+          return;
+        case "closeTab": {
+          if (
+            browserSessions === null ||
+            browserSessions.lifecycle !== "live"
+          ) {
+            return;
+          }
+          // Retire the canvas tile only after the host agrees the tab is
+          // gone - a refused close must not leave a live tab with no tile.
+          void browserSessions
+            .closeTab(props.node.sessionId, props.binding.tabId)
+            .then(closeCanvasTile)
+            .catch(() => {
+              toast.error("Couldn't close the browser tab. Try again.");
+            });
+          return;
+        }
+      }
+    });
+    return () => {
+      subscription.dispose();
+    };
+  }, [
+    focusAddress,
+    browserSessions,
+    browserView,
+    closeCanvasTile,
+    openTabBesideThisTile,
+    props.binding.tabId,
+    props.node.sessionId,
+    tileKey,
+  ]);
+
   useEffect(() => {
     if (!shouldAttachSurface(visible, showStartPage)) return;
     let active = true;
@@ -322,6 +432,16 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       const lease = surfaceLeaseRef.current;
       surfaceLeaseRef.current = null;
       if (lease !== null) void lease.detach();
+      // The surface is gone in main the moment we detach, so the readiness
+      // this state feeds must go with it. Leaving it "ready" is what let the
+      // bounds bridge (declared ABOVE this effect, so it re-mounts first)
+      // fire its one mount-time `updateBounds` at a surface key main no
+      // longer maps - the send is dropped, the rAF dedupe never repeats it,
+      // and the re-attached tile stays at `bounds === null`, i.e. invisible
+      // until a window resize. Clearing here keeps the bridge unmounted until
+      // the NEXT attach resolves. The in-flight attach cannot resurrect it:
+      // `active` is already false, so its `.then`/`.catch` return early.
+      setSurfaceAttachment(null);
     };
   }, [bindSurface, bindingId, registrationId, showStartPage, tileKey, visible]);
 
@@ -335,7 +455,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         tileKey={tileKey}
       />
       <BrowserTileToolbar
-        controller={chrome.controller}
+        controller={chromeController}
         pictureInPicture={{
           disabled: epicId === null,
           convert: () => {
@@ -361,7 +481,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
           startPageEpicId={startPageEpicId}
           hostId={hostId}
           snapshot={snapshot}
-          onNavigate={chrome.navigateToUrl}
+          onNavigate={navigateToUrl}
         />
         <div
           hidden={showStartPage}
@@ -380,13 +500,13 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
           />
         </div>
         <BrowserTileDownloadStrip
-          downloads={chrome.downloads}
-          onCancel={chrome.cancelDownload}
+          downloads={downloads}
+          onCancel={cancelDownload}
         />
         <BrowserTileCertificateInterstitial
-          certificateError={chrome.certificateError}
-          proceeding={chrome.certificateProceeding}
-          onProceed={chrome.proceedCertificate}
+          certificateError={certificateError}
+          proceeding={certificateProceeding}
+          onProceed={proceedCertificate}
         />
       </div>
     </div>
@@ -578,4 +698,18 @@ function isStaleSettleBeforeEcho(
   status: BrowserViewStatus,
 ): boolean {
   return current !== null && status === "ready" && !current.echoSeen;
+}
+
+/**
+ * The popup's own canvas tab while it still exists, else the epic - which
+ * lets the resolver pick (or create) a live tab instead of writing a tile
+ * into a tab that closed while `openTab` was in flight (R8).
+ */
+function currentPopupTarget(
+  viewTabId: string,
+  epicId: string | null,
+): TileOpenTarget {
+  const tabs = useEpicCanvasStore.getState().tabsById;
+  if (tabs[viewTabId] !== undefined) return { tabId: viewTabId };
+  return epicId === null ? { tabId: viewTabId } : { epicId };
 }

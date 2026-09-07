@@ -934,17 +934,11 @@ describe("preload new-capability wiring", () => {
     });
   });
 
-  it("forwards browser cookie crypto state through ipcRenderer.invoke", async () => {
-    const cryptoState = {
-      mode: "degraded",
-      persistence: "ephemeral",
-      reason: "keychain-denied",
-      storageBackend: null,
-      encryptionAvailable: false,
-    };
-    const invokeFn = vi.fn(async (channel: string) => {
-      if (channel === RunnerHostInvoke.browserViewCookieCryptoStateGet) {
-        return cryptoState;
+  it("round-trips the saved-logins pref through ipcRenderer.invoke", async () => {
+    const invokeFn = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === RunnerHostInvoke.browserViewSaveLoginsGet) return true;
+      if (channel === RunnerHostInvoke.browserViewSaveLoginsSet) {
+        return args[0];
       }
       return undefined;
     });
@@ -956,39 +950,78 @@ describe("preload new-capability wiring", () => {
       sendSyncFn: undefined,
     });
 
-    await expect(bridge.browserView.getCookieCryptoState()).resolves.toEqual(
-      cryptoState,
+    await expect(bridge.browserView.getSaveLogins()).resolves.toBe(true);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.browserViewSaveLoginsGet,
     );
 
+    await expect(bridge.browserView.setSaveLogins(false)).resolves.toBe(false);
     expect(invokeFn).toHaveBeenCalledWith(
-      RunnerHostInvoke.browserViewCookieCryptoStateGet,
+      RunnerHostInvoke.browserViewSaveLoginsSet,
+      false,
     );
-    expect(invokeFn).toHaveBeenCalledTimes(1);
+    expect(invokeFn).toHaveBeenCalledTimes(2);
   });
 
-  it("exposes capturePrimaryProfile as a zero-arg invoke (ticket 06)", async () => {
-    const primaryResult = {
-      status: "captured",
-      storageState: {
-        cookies: [
-          {
-            name: "sid",
-            value: "abc",
-            domain: "example.com",
-            path: "/",
-            expires: -1,
-            httpOnly: true,
-            secure: true,
-            sameSite: "Lax",
-          },
-        ],
-        origins: [],
-      },
-      reason: null,
+  it("routes the sessions-stream open/close/send trio to their H10 channels", async () => {
+    const invokeFn = vi.fn(async () => undefined);
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+    const key = {
+      epicId: "epic-1",
+      hostId: "host-1",
+      identityKey: "identity-1",
     };
+
+    // A host id and an epic, and nothing else: main reads the signed-in user
+    // from the desktop auth session it owns (H10 ruling 1).
+    await bridge.browserView.openSessionsStream(key);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.browserViewSessionsOpen,
+      key,
+    );
+
+    await bridge.browserView.sendSessionsFrame({
+      key,
+      frame: {
+        kind: "openTab",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        sessionId: null,
+        url: "https://example.com",
+      },
+    });
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.browserViewSessionsSend,
+      {
+        key,
+        frame: {
+          kind: "openTab",
+          hasBinaryPayload: false,
+          requestId: "request-1",
+          sessionId: null,
+          url: "https://example.com",
+        },
+      },
+    );
+
+    await bridge.browserView.closeSessionsStream(key);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.browserViewSessionsClose,
+      key,
+    );
+    expect(invokeFn).toHaveBeenCalledTimes(3);
+  });
+
+  it("routes clearSavedLoginSite to its own confirm-then-clear channel", async () => {
     const invokeFn = vi.fn(async (channel: string) => {
-      if (channel === RunnerHostInvoke.browserViewPrimaryProfileCapture) {
-        return primaryResult;
+      if (channel === RunnerHostInvoke.browserViewClearSavedLoginSite) {
+        return true;
       }
       return undefined;
     });
@@ -1000,11 +1033,12 @@ describe("preload new-capability wiring", () => {
       sendSyncFn: undefined,
     });
 
-    await expect(bridge.browserView.capturePrimaryProfile()).resolves.toEqual(
-      primaryResult,
-    );
+    await expect(
+      bridge.browserView.clearSavedLoginSite("example.com"),
+    ).resolves.toBe(true);
     expect(invokeFn).toHaveBeenCalledWith(
-      RunnerHostInvoke.browserViewPrimaryProfileCapture,
+      RunnerHostInvoke.browserViewClearSavedLoginSite,
+      { domain: "example.com" },
     );
     expect(invokeFn).toHaveBeenCalledTimes(1);
   });

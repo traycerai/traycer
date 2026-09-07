@@ -1,4 +1,10 @@
-import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { Slot } from "radix-ui";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -11,11 +17,13 @@ import type { WorktreePrReference } from "@/components/worktree/worktree-pr-meta
 import { WorktreeOwnerSettingsHeader } from "@/components/worktree/worktree-owner-settings-header";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { useOwnerListPrReferences } from "@/hooks/pr/use-owner-pr-references";
 import { makePrDetailTile } from "@/lib/pr/pr-detail-tile";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { useWorktreeOwnerMetadata } from "@/hooks/worktree/use-worktree-owner-metadata-query";
 import { useBareKeyClaimer } from "@/lib/keybindings/use-bare-key-claimer";
 import { useCompactRelativeTime } from "@/lib/relative-time";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 // The git probes this forces are disk-bound and the `gh` PR probe is a network
 // call, so the spinner gets a longer leash than the Settings toolbar's 10s -
@@ -71,7 +79,7 @@ export function WorktreeOwnerMetadataTooltip(props: {
     useState<OwnerMetadataHoverState>(CLOSED_HOVER_STATE);
   const open = !hoverState.pressed && hoverState.hoverOpen;
   const client = useHostClientForHostId(props.hostId);
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const openPrInApp = (reference: WorktreePrReference): void => {
     if (
       reference.githubHost === null ||
@@ -80,16 +88,20 @@ export function WorktreeOwnerMetadataTooltip(props: {
     ) {
       return;
     }
-    tileNavigation.openTileInEpic(
-      props.epicId,
-      makePrDetailTile({
-        hostId: props.hostId,
-        githubHost: reference.githubHost,
-        owner: reference.owner,
-        repo: reference.repo,
-        prNumber: reference.prNumber,
-        name: `${reference.repo} #${reference.prNumber}`,
-      }),
+    openTile(
+      tileIntent(
+        makePrDetailTile({
+          hostId: props.hostId,
+          githubHost: reference.githubHost,
+          owner: reference.owner,
+          repo: reference.repo,
+          prNumber: reference.prNumber,
+          name: `${reference.repo} #${reference.prNumber}`,
+        }),
+        { epicId: props.epicId },
+        "explicit",
+        "direct_ui",
+      ),
     );
   };
   const metadata = useWorktreeOwnerMetadata({
@@ -100,11 +112,21 @@ export function WorktreeOwnerMetadataTooltip(props: {
     binding: undefined,
     enabled: open,
   });
+  const ownerPr = useOwnerListPrReferences({
+    hostId: props.hostId,
+    epicId: props.epicId,
+    ownerId: props.ownerId,
+    ownerKind: props.ownerKind,
+    enabled: open,
+  });
+  const refreshMetadata = metadata.refresh;
+  const sendOwnerPrRefresh = ownerPr.sendRefresh;
+  const refreshOwnerMetadata = useCallback(async (): Promise<void> => {
+    sendOwnerPrRefresh();
+    await refreshMetadata();
+  }, [refreshMetadata, sendOwnerPrRefresh]);
   const refresh = useRefreshSpinner({
-    // Passed straight through rather than wrapped: `metadata` is a fresh object
-    // literal every render, so a `useCallback` closing over it would change
-    // identity every render and re-bind the key listener below each time.
-    onRefresh: metadata.refresh,
+    onRefresh: refreshOwnerMetadata,
     externalRefreshing: metadata.isRefreshing,
     timeoutMs: OWNER_METADATA_REFRESH_TIMEOUT_MS,
   });
@@ -184,9 +206,10 @@ export function WorktreeOwnerMetadataTooltip(props: {
               binding={metadata.binding}
               worktrees={metadata.worktrees}
               workspaces={metadata.workspaces}
-              pending={metadata.isPending}
+              prReferences={ownerPr.references}
+              pending={metadata.isPending || ownerPr.isPending}
               hostUnavailable={metadata.hostUnavailable}
-              error={metadata.error !== null}
+              error={metadata.error !== null || ownerPr.error}
               openPrInApp={openPrInApp}
             />
           </span>

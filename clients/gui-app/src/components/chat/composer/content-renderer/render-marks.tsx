@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ComposerMarkLink } from "./composer-mark-link";
 
 type Mark = { type: string; attrs?: Record<string, unknown> };
 
@@ -25,14 +26,9 @@ export function applyMarks(
     if (mark.type === "link") {
       const href = typeof mark.attrs?.href === "string" ? mark.attrs.href : "#";
       return (
-        <a
-          key={key}
-          href={href}
-          className="underline decoration-1 underline-offset-2"
-          rel="noopener noreferrer"
-        >
+        <ComposerMarkLink key={key} href={href}>
           {node}
-        </a>
+        </ComposerMarkLink>
       );
     }
     return node;

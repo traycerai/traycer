@@ -99,7 +99,6 @@ function renderPopover(editor: Editor, editable: boolean) {
         editable={editable}
         scrollContainer={null}
         openLink={openLink}
-        openLinkPending={false}
         onOpenChange={onOpenChange}
       />
     </>,
@@ -149,7 +148,6 @@ function ToolbarPopoverHarness(props: { readonly editor: Editor }) {
         editable
         scrollContainer={null}
         openLink={() => undefined}
-        openLinkPending={false}
         onOpenChange={setLinkOpen}
       />
     </>
@@ -186,7 +184,6 @@ function KeyboardPopoverHarness(props: {
         editable={editable}
         scrollContainer={null}
         openLink={openLink}
-        openLinkPending={false}
         onOpenChange={() => undefined}
       />
       <button type="button">Outside</button>
@@ -323,7 +320,6 @@ describe("ArtifactLinkPopover", () => {
           editable
           scrollContainer={null}
           openLink={vi.fn()}
-          openLinkPending={false}
           onOpenChange={onOpenChange}
         />
       </SurfacePresentationBoundary>
@@ -1199,7 +1195,6 @@ describe("ArtifactLinkPopover", () => {
             editable
             scrollContainer={null}
             openLink={() => undefined}
-            openLinkPending={false}
             onOpenChange={() => undefined}
           />
         </KeybindingProvider>,
@@ -1370,32 +1365,6 @@ describe("ArtifactLinkPopover", () => {
     expect(screen.getByLabelText("Link")).not.toBeNull();
     expect(screen.getByText("custom:target")).not.toBeNull();
     expect(screen.queryByRole("button", { name: /Open link:/ })).toBeNull();
-    cleanup();
-
-    const pendingEditor = makeEditor(LINK_CONTENT);
-    pendingEditor.commands.setTextSelection(2);
-    const openLink = vi.fn<(link: OpenableArtifactLink) => void>();
-    render(
-      <>
-        <EditorContent editor={pendingEditor} />
-        <ArtifactLinkPopover
-          editor={pendingEditor}
-          editable={false}
-          scrollContainer={null}
-          openLink={openLink}
-          openLinkPending
-          onOpenChange={() => undefined}
-        />
-      </>,
-    );
-
-    const open = await screen.findByRole<HTMLButtonElement>("button", {
-      name: "Open link: https://example.com",
-    });
-    expect(open.disabled).toBe(true);
-    expect(screen.getByTestId("artifact-link-open-pending")).not.toBeNull();
-    fireEvent.click(open);
-    expect(openLink).not.toHaveBeenCalled();
   });
 
   it("tracks the mapped anchor one-for-one on ordinary scroll", async () => {
@@ -1439,7 +1408,6 @@ describe("ArtifactLinkPopover", () => {
           editable
           scrollContainer={boundary}
           openLink={() => undefined}
-          openLinkPending={false}
           onOpenChange={() => undefined}
         />
       </>,
@@ -1504,7 +1472,6 @@ describe("ArtifactLinkPopover", () => {
           editable
           scrollContainer={null}
           openLink={openLink}
-          openLinkPending={false}
           onOpenChange={onOpenChange}
         />
       </>,
@@ -1531,10 +1498,12 @@ describe("ArtifactLinkPopover", () => {
     fireEvent.mouseUp(anchor, { metaKey: true, button: 0 });
     fireEvent.click(anchor, { metaKey: true });
     expect(editor.state.selection.from).toBe(before);
-    expect(openLink).toHaveBeenCalledWith({
-      kind: "external",
-      url: "https://example.com",
-    });
+    // The activating event travels with the link so the seam can read
+    // `meta` (forces the OS browser) and `button` (middle = background).
+    expect(openLink).toHaveBeenCalledWith(
+      { kind: "external", url: "https://example.com" },
+      expect.objectContaining({ metaKey: true, button: 0 }),
+    );
 
     rerender(
       <>
@@ -1544,7 +1513,6 @@ describe("ArtifactLinkPopover", () => {
           editable={false}
           scrollContainer={null}
           openLink={openLink}
-          openLinkPending={false}
           onOpenChange={() => undefined}
         />
       </>,
@@ -1577,10 +1545,10 @@ describe("ArtifactLinkPopover", () => {
 
     expect(editor.state.selection.from).toBe(before);
     expect(openLink).toHaveBeenCalledTimes(1);
-    expect(openLink).toHaveBeenCalledWith({
-      kind: "external",
-      url: "https://example.com",
-    });
+    expect(openLink).toHaveBeenCalledWith(
+      { kind: "external", url: "https://example.com" },
+      expect.objectContaining({ button: 0 }),
+    );
     expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
   });
 
@@ -1644,10 +1612,10 @@ describe("ArtifactLinkPopover", () => {
     fireEvent.click(second);
 
     expect(openLink).toHaveBeenCalledTimes(1);
-    expect(openLink).toHaveBeenCalledWith({
-      kind: "external",
-      url: "https://traycer.ai",
-    });
+    expect(openLink).toHaveBeenCalledWith(
+      { kind: "external", url: "https://traycer.ai" },
+      expect.anything(),
+    );
     expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
     expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
     expect(onOpenChange).toHaveBeenCalledWith(false);
@@ -1672,10 +1640,10 @@ describe("ArtifactLinkPopover", () => {
     fireEvent.mouseUp(second, { button: 0 });
     fireEvent.click(second);
 
-    expect(openLink).toHaveBeenCalledWith({
-      kind: "external",
-      url: "https://traycer.ai",
-    });
+    expect(openLink).toHaveBeenCalledWith(
+      { kind: "external", url: "https://traycer.ai" },
+      expect.anything(),
+    );
     expect(editor.view.dom.querySelector("a")?.dataset.linkHref).toBe(
       "https://changed.example",
     );
@@ -1712,12 +1680,10 @@ describe("ArtifactLinkPopover", () => {
     fireEvent.mouseUp(anchor, { button: 0 });
     fireEvent.click(anchor);
 
-    expect(openLink).toHaveBeenCalledWith({
-      kind: "file",
-      path: "/repo/src/app.ts",
-      line: 12,
-      col: 3,
-    });
+    expect(openLink).toHaveBeenCalledWith(
+      { kind: "file", path: "/repo/src/app.ts", line: 12, col: 3 },
+      expect.anything(),
+    );
     expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
   });
 
@@ -1740,10 +1706,10 @@ describe("ArtifactLinkPopover", () => {
     expect(anchor.hasAttribute("href")).toBe(false);
 
     expect(fireEvent.keyDown(anchor, { key: "Enter" })).toBe(false);
-    expect(openLink).toHaveBeenCalledWith({
-      kind: "external",
-      url: "https://example.com",
-    });
+    expect(openLink).toHaveBeenCalledWith(
+      { kind: "external", url: "https://example.com" },
+      expect.anything(),
+    );
     expect(editor.getText()).toBe(before);
     fireEvent.keyDown(anchor, { key: " " });
     expect(openLink).toHaveBeenCalledTimes(1);
@@ -1976,12 +1942,10 @@ describe("ArtifactLinkPopover", () => {
     if (fileAnchor === null) throw new Error("Expected file anchor");
     expect(fileAnchor.getAttribute("href")).toBeNull();
     expect(fireEvent.click(fileAnchor)).toBe(false);
-    expect(file.openLink).toHaveBeenCalledWith({
-      kind: "file",
-      path: "/repo/src/app.ts",
-      line: 12,
-      col: 3,
-    });
+    expect(file.openLink).toHaveBeenCalledWith(
+      { kind: "file", path: "/repo/src/app.ts", line: 12, col: 3 },
+      expect.anything(),
+    );
     cleanup();
 
     const unsafeEditor = makeLinkedEditor("javascript:alert(1)");

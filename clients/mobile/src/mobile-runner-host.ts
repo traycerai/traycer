@@ -623,6 +623,10 @@ export class MobileRunnerHost implements IRunnerHost {
     // Mobile microphone permissions are driven by `getUserMedia`.
   }
 
+  async openFullDiskAccessSettings(): Promise<void> {
+    // No Full Disk Access pane, and no login import, on mobile.
+  }
+
   onAuthCallback(handler: () => void): Disposable {
     // The browser-return signal is the app coming back to the FOREGROUND, not
     // a parsed callback URL. The `traycer://auth/callback` deep link the

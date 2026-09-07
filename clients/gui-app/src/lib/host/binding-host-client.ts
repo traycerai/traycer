@@ -83,3 +83,21 @@ export function resolveAppWideHostClient(
   }
   return binding.hostClient.createRequesterForHostId(effectiveHostId);
 }
+
+/**
+ * A requester for a host ID explicitly named by the caller.
+ *
+ * Kept at the binding boundary for the same reason as the two resolvers above:
+ * a host-scoped subtree may hand us a pinned facade, but explicit resolution
+ * must still reach the shared spine's live directory and must never borrow the
+ * subtree's ambient host identity.
+ */
+export function resolveNamedHostClient(
+  binding: HostRuntimeBinding<HostRpcRegistry> | null,
+  hostId: string,
+): HostClient<HostRpcRegistry> | null {
+  if (binding === null) {
+    return null;
+  }
+  return binding.hostClient.createRequesterForHostId(hostId);
+}

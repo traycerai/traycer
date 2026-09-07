@@ -1,6 +1,7 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
-import { DismissableLayer } from "radix-ui/internal";
+import { DismissableLayer, useComposedRefs } from "radix-ui/internal";
 import {
   CircleCheckIcon,
   InfoIcon,
@@ -9,6 +10,18 @@ import {
 } from "lucide-react";
 import { ProgressToastIcon } from "@/components/ui/progress-toast-icon";
 import { cn } from "@/lib/utils";
+import {
+  listBrowserOverlayTiles,
+  registerBrowserOverlay,
+  subscribeBrowserOverlayLayout,
+} from "@/lib/browser-view/tiles/browser-overlay-coordinator";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
+import {
+  DEFAULT_TOASTER_ANCHOR,
+  pickToasterAnchor,
+  type ToasterAnchor,
+  type ToasterSize,
+} from "@/components/ui/toaster-anchor";
 
 const TOAST_CLASS_NAME = cn("cn-toast", "group/toast");
 const TOAST_CLOSE_BUTTON_CLASS_NAME = cn(
@@ -31,10 +44,82 @@ const TOAST_CANCEL_BUTTON_CLASS_NAME = cn(
 const INTERACTIVE_ELEMENT_SELECTOR =
   "button, a, input, textarea, select, [role='button']";
 const NOTIFICATION_TOAST_ACTION_SELECTOR = "[data-notification-toast-action]";
+// The outer `<section>` sonner renders is a static, zero-height wrapper -
+// the fixed, painted surface is one `<ol data-sonner-toaster>` per toast
+// position, and sonner (2.0.8) mounts each only once a toast exists for
+// that position. The section itself is worth registering too (it is what
+// `Sonner`'s own `ref` forwards to, and a stable anchor costs nothing), but
+// occlusion has to track the `<ol>`s, which come and go independently.
+const SONNER_TOASTER_LIST_SELECTOR = "[data-sonner-toaster]";
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme();
   const toasterTheme = normalizeToasterTheme(theme);
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const registerSectionOverlayRef = useRegisterBrowserOverlay<HTMLElement>();
+  const composedRef = useComposedRefs(sectionRef, registerSectionOverlayRef);
+  // Sonner mounts the `<ol>` only while a toast exists (see the selector
+  // comment above), so this is also the "is a toast currently visible" flag
+  // - `recomputeAnchor` reads it to honor invariant 10's other half:
+  // don't re-anchor a toaster a toast is already showing on.
+  const toastVisibleRef = useRef(false);
+  // The toaster's own last-measured rect, cached across the `<ol>` mounting
+  // and unmounting so a prospective anchor rect never has to hardcode a
+  // size - see `toaster-anchor.ts`.
+  const toasterSizeRef = useRef<ToasterSize | null>(null);
+  const [anchor, setAnchor] = useState<ToasterAnchor>(DEFAULT_TOASTER_ANCHOR);
+
+  const recomputeAnchor = useCallback(() => {
+    if (toastVisibleRef.current) return;
+    setAnchor(
+      pickToasterAnchor({
+        toasterSize: toasterSizeRef.current,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        tileRects: listBrowserOverlayTiles().map((tile) => tile.rect),
+      }),
+    );
+  }, []);
+
+  useEffect(() => {
+    const section = sectionRef.current;
+    if (section === null) return;
+    const deregisterByList = new Map<Element, () => void>();
+    const sync = (): void => {
+      const lists = section.querySelectorAll<HTMLElement>(
+        SONNER_TOASTER_LIST_SELECTOR,
+      );
+      const seen = new Set<Element>(lists);
+      deregisterByList.forEach((deregister, element) => {
+        if (seen.has(element)) return;
+        deregister();
+        deregisterByList.delete(element);
+      });
+      lists.forEach((element) => {
+        const rect = element.getBoundingClientRect();
+        toasterSizeRef.current = { width: rect.width, height: rect.height };
+        if (deregisterByList.has(element)) return;
+        deregisterByList.set(element, registerBrowserOverlay({ element }));
+      });
+      toastVisibleRef.current = lists.length > 0;
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    // `subtree`, not just the section's own children: a toast added to an
+    // ALREADY-mounted `<ol>` is a mutation inside it, not of the section, so
+    // a childList-only observer would keep the first measured size and let
+    // `pickToasterAnchor` compare a rect the grown toaster has outgrown.
+    observer.observe(section, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      deregisterByList.forEach((deregister) => deregister());
+      deregisterByList.clear();
+    };
+  }, []);
+
+  useEffect(
+    () => subscribeBrowserOverlayLayout(recomputeAnchor),
+    [recomputeAnchor],
+  );
 
   return (
     <DismissableLayer.Branch
@@ -42,6 +127,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
       onClick={activateNotificationToastSurface}
     >
       <Sonner
+        ref={composedRef}
         theme={toasterTheme}
         className="toaster group"
         icons={{
@@ -68,6 +154,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
         }}
         {...props}
         closeButton={props.closeButton ?? true}
+        position={props.position ?? anchor}
       />
     </DismissableLayer.Branch>
   );

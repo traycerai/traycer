@@ -1,19 +1,42 @@
-import type { Cookie, CookiesGetFilter, CookiesSetDetails } from "electron";
+import type {
+  ClearStorageDataOptions,
+  Cookie,
+  CookiesGetFilter,
+  CookiesSetDetails,
+} from "electron";
 import { z } from "zod";
 import {
   browserStorageCookieSchema as protocolStorageCookieSchema,
   browserStorageLocalStorageEntrySchema,
   browserStorageOriginSchema as protocolStorageOriginSchema,
   browserStorageStateSchema as protocolStorageStateSchema,
+  type BrowserCookieKey,
   type BrowserStorageCookie as ProtocolStorageCookie,
   type BrowserStorageLocalStorageEntry,
   type BrowserStorageOrigin,
   type BrowserStorageState as ProtocolStorageState,
 } from "@traycer/protocol/host/browser/contracts";
-import type {
-  BrowserCookieCryptoState,
-  BrowserPrimaryProfileCaptureResult,
-} from "@traycer-clients/shared/platform/browser-view";
+import {
+  canonicalCookieHost,
+  cookieDomainInScope,
+} from "@traycer/protocol/host/browser/registrable-domain";
+
+/**
+ * What a whole-jar read answers. Main-side only: the capture is produced and
+ * consumed in this process now, and the storage state never crosses to a
+ * renderer.
+ */
+export type BrowserPrimaryProfileCaptureResult =
+  | {
+      readonly status: "captured";
+      readonly storageState: ProtocolStorageState;
+      readonly reason: null;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly storageState: null;
+      readonly reason: string;
+    };
 
 type BrowserStorageCookieSameSite = ProtocolStorageCookie["sameSite"];
 const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;
@@ -49,15 +72,15 @@ const desktopStorageStateSchema = protocolStorageStateSchema.extend({
   origins: z.array(desktopStorageOriginSchema),
 });
 
-type DesktopStorageCookie = z.infer<typeof desktopStorageCookieSchema>;
+export type DesktopStorageCookie = z.infer<typeof desktopStorageCookieSchema>;
 type DesktopStorageState = z.infer<typeof desktopStorageStateSchema>;
 
-interface BrowserCookieDomain {
+export interface BrowserCookieDomain {
   readonly domain: string;
   readonly canonicalDomain: string;
 }
 
-interface BrowserCookieSetDetails {
+export interface BrowserCookieSetDetails {
   readonly url: string;
   readonly name: string;
   readonly value: string;
@@ -80,8 +103,20 @@ export interface BrowserStorageSession {
   readonly cookies: BrowserCookieStore;
 }
 
-export interface BrowserStorageSeedWebContents {
-  readonly session: BrowserStorageSession;
+/**
+ * The slice of Electron's `Session` a site clear needs. It is its own port
+ * rather than an extension of the seed/capture one: only this path removes
+ * anything. `clearStorageData` is called with an `origin` and nothing else -
+ * the whole-partition form of the same call is how "forget all logins" works,
+ * and one site's clear must never widen into it.
+ */
+export interface BrowserSiteClearSession {
+  readonly cookies: {
+    get(filter: CookiesGetFilter): Promise<Cookie[]>;
+    remove(url: string, name: string): Promise<void>;
+    flushStore(): Promise<void>;
+  };
+  clearStorageData(options: ClearStorageDataOptions): Promise<void>;
 }
 
 export interface BrowserStorageCaptureWebContents {
@@ -92,7 +127,8 @@ export interface BrowserStorageCaptureWebContents {
 export type BrowserPrimaryProfileOriginSnapshot = BrowserStorageOrigin;
 
 export interface BrowserPrimaryProfileCaptureDependencies {
-  readonly readCryptoState: () => BrowserCookieCryptoState;
+  /** A machine that is not saving logins has no durable jar worth capturing. */
+  readonly readSaveLogins: () => boolean;
   readonly getSession: () => BrowserStorageSession;
 }
 
@@ -100,12 +136,11 @@ export async function captureBrowserPrimaryProfile(
   origins: readonly BrowserPrimaryProfileOriginSnapshot[],
   dependencies: BrowserPrimaryProfileCaptureDependencies,
 ): Promise<BrowserPrimaryProfileCaptureResult> {
-  const cryptoState = dependencies.readCryptoState();
-  if (cryptoState.mode === "degraded") {
+  if (!dependencies.readSaveLogins()) {
     return {
       status: "unavailable",
       storageState: null,
-      reason: cryptoState.reason,
+      reason: "saved-logins-off",
     };
   }
   const browserSession = dependencies.getSession();
@@ -140,6 +175,27 @@ type SequencedPrimaryProfileOrigin = BrowserPrimaryProfileOriginSnapshot & {
   readonly sequence: number;
 };
 
+/**
+ * One `captureOrigin` read still in flight.
+ *
+ * The origin travels with it because a site clear has to be able to reach it:
+ * {@link BrowserPrimaryProfileSnapshotCoordinator.forgetOriginsUnder} runs
+ * while a read of the same origin may still be out, and that read landing
+ * afterwards would write back the origin the user just cleared - which the next
+ * capture uploads to the host and the seed script then restores into a
+ * recreated tile.
+ */
+interface PendingOriginObservation {
+  readonly origin: string;
+  readonly settled: Promise<void>;
+  /**
+   * Set by a clear whose scope covers {@link origin}; the completion sees it
+   * and drops itself. Per-observation rather than the jar-wide `era`, which
+   * would discard the in-flight reads of unrelated origins with it.
+   */
+  invalidated: boolean;
+}
+
 /** Owns recent localStorage observations and the capture barrier over them. */
 export class BrowserPrimaryProfileSnapshotCoordinator {
   private readonly origins = new Map<string, SequencedPrimaryProfileOrigin>();
@@ -154,8 +210,10 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
    * to read them from.
    */
   private seededOrigins: readonly BrowserPrimaryProfileOriginSnapshot[] = [];
-  private readonly observations = new Set<Promise<void>>();
+  private readonly observations = new Set<PendingOriginObservation>();
   private sequence = 0;
+  /** Bumped by `reset()`; observations from an earlier era are discarded. */
+  private era = 0;
 
   constructor(
     private readonly captureProfile: (
@@ -197,10 +255,14 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
     const origin = parseCurrentOrigin(url);
     if (origin === null) return;
     const sequence = ++this.sequence;
-    let observation: Promise<void>;
-    observation = this.captureOrigin(origin, webContents)
+    const era = this.era;
+    let pending: PendingOriginObservation;
+    const settled = this.captureOrigin(origin, webContents)
       .then((snapshot) => {
         if (snapshot === null) return;
+        // Dropped when the whole jar moved on (`reset`), and when only this
+        // origin did (a site clear that ran while the read was out).
+        if (era !== this.era || pending.invalidated) return;
         const current = this.origins.get(origin);
         if (current !== undefined && current.sequence > sequence) return;
         this.origins.delete(origin);
@@ -218,9 +280,92 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
       })
       .catch(() => undefined)
       .finally(() => {
-        this.observations.delete(observation);
+        this.observations.delete(pending);
       });
-    this.observations.add(observation);
+    pending = { origin, settled, invalidated: false };
+    this.observations.add(pending);
+  }
+
+  /**
+   * Forgets every remembered origin ("forget all browser logins"). Both
+   * tiers go: the origins observed this run AND the ones carried over
+   * from the seed or demoted out of the LRU - a capture draws on both, so
+   * leaving either behind would re-upload the localStorage the user forgot.
+   * Observations already in flight are discarded with them: each was read from
+   * the jar being cleared, and one landing afterwards would re-seed a recreated
+   * tile with the localStorage the user just forgot.
+   */
+  reset(): void {
+    this.origins.clear();
+    this.seededOrigins = [];
+    this.era += 1;
+  }
+
+  /**
+   * The same forgetting, narrowed to one site ("clear cookies for this site").
+   * Both tiers again, and for the reason {@link reset} gives: a capture merges
+   * the observed and the carried-over origins into the host's whole jar, and
+   * {@link browserLocalStorageSeedScript} writes them back into a recreated
+   * tile - so an origin left in either tier puts back the localStorage the
+   * user just cleared.
+   *
+   * A third tier goes with them: the reads still IN FLIGHT for those origins.
+   * Each was taken from the jar being cleared, so one landing afterwards would
+   * put the origin straight back - and unlike {@link reset}'s `era` bump, this
+   * reaches only the origins in scope, leaving an unrelated site's concurrent
+   * read to complete.
+   *
+   * All three are scoped with {@link originInScope}, which is the predicate
+   * {@link clearBrowserSite} selects origins with, so what is pruned here and
+   * what Chromium was told to clear cannot drift apart.
+   */
+  forgetOriginsUnder(domain: string): void {
+    for (const origin of [...this.origins.keys()]) {
+      if (originInScope(origin, domain)) this.origins.delete(origin);
+    }
+    this.seededOrigins = this.seededOrigins.filter(
+      (entry) => !originInScope(entry.origin, domain),
+    );
+    for (const pending of this.observations) {
+      if (originInScope(pending.origin, domain)) pending.invalidated = true;
+    }
+  }
+
+  /**
+   * Every origin this process knows localStorage for, newest first, without
+   * awaiting in-flight observations. Both tiers again: a site clear must reach
+   * a demoted or seeded origin too, or the site keeps the localStorage the
+   * user just cleared and the next capture ships it back to the host.
+   */
+  rememberedOrigins(): readonly BrowserPrimaryProfileOriginSnapshot[] {
+    const observed = [...this.origins.values()]
+      .reverse()
+      .map(({ origin, localStorage }) => ({ origin, localStorage }));
+    const seen = new Set(observed.map((entry) => entry.origin));
+    return [
+      ...observed,
+      ...this.seededOrigins.filter((entry) => !seen.has(entry.origin)),
+    ];
+  }
+
+  /**
+   * Every origin a site clear can NAME, which is wider than
+   * {@link rememberedOrigins}: the origins whose read is still IN FLIGHT are
+   * here too. A pending read has no entries yet, so it is nothing to
+   * capture - but the tile it was taken from is live on that origin, and a
+   * clear that only invalidated the read would leave the live localStorage
+   * where it is, to meet the imported cookies on the next reload. Settled
+   * first, then the pending ones not already named.
+   */
+  clearableOrigins(): readonly string[] {
+    const origins = this.rememberedOrigins().map((entry) => entry.origin);
+    const seen = new Set(origins);
+    for (const pending of this.observations) {
+      if (seen.has(pending.origin)) continue;
+      seen.add(pending.origin);
+      origins.push(pending.origin);
+    }
+    return origins;
   }
 
   private retainObservedOrigin(
@@ -233,7 +378,7 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
   }
 
   async capture(): Promise<BrowserPrimaryProfileCaptureResult> {
-    await Promise.all([...this.observations]);
+    await Promise.all([...this.observations].map((pending) => pending.settled));
     const observed = [...this.origins.values()]
       .reverse()
       .map(({ origin, localStorage }) => ({ origin, localStorage }));
@@ -288,36 +433,410 @@ export function browserLocalStorageSeedScript(
   ].join("\n");
 }
 
-export async function seedBrowserViewCookies(
-  storageState: ProtocolStorageState | null,
-  webContents: BrowserStorageSeedWebContents,
-): Promise<void> {
-  if (storageState === null) return;
-  const cookieDetails = parseStorageState(storageState)
-    // Electron's cookies API has no partition key, so setting a partitioned
-    // cookie here would land it in the UNPARTITIONED jar - readable from
-    // top-level sites CHIPS scoped it out of. Skipping it costs a re-login in
-    // that embedded context; restoring it merged is a cross-site leak.
-    .cookies.filter((cookie) => cookie.partitionKey === null)
-    .map(toCookieSetDetails);
-  for (const details of cookieDetails) {
-    await webContents.session.cookies.set(toElectronCookieSetDetails(details));
+/**
+ * Electron cookies as the protocol shape, with the one normalisation the whole
+ * store depends on: a host-only cookie loses its leading dot, so `{domain,
+ * name, path}` is the same identity here as in the host's tombstone keys.
+ *
+ * A cookie this shell cannot normalise is SKIPPED, not thrown on - see
+ * {@link safeStorageCookie}. The callers here are the observers of a jar they
+ * do not control, and one unrepresentable cookie must not cost them the batch.
+ */
+export function browserStorageCookies(
+  cookies: readonly Cookie[],
+): readonly ProtocolStorageCookie[] {
+  return cookies.flatMap((cookie) => {
+    const storageCookie = safeStorageCookie(cookie);
+    return storageCookie === null
+      ? []
+      : [toProtocolStorageCookie(storageCookie)];
+  });
+}
+
+/**
+ * {@link toStorageCookie} for a jar that may hold a cookie this shell cannot
+ * represent, answering `null` instead of throwing.
+ *
+ * Still reachable, though narrower now that {@link readCookieDomain}
+ * normalises rather than rejects: a domain the URL parser cannot place at all
+ * (and a cookie whose name or path this shell refuses) still throws. The
+ * delta, the site clear and the removal-key path all want the same thing from
+ * such a cookie - skip it and keep going - so they share this one guard rather
+ * than each growing a `try`.
+ *
+ * The CAPTURE path deliberately does not use it: a capture replaces the host's
+ * whole jar, so quietly dropping a cookie there would delete that login for
+ * good. Failing loudly is the safe direction on that path and the wrong one
+ * here.
+ */
+export function safeStorageCookie(cookie: Cookie): DesktopStorageCookie | null {
+  try {
+    return toStorageCookie(cookie);
+  } catch {
+    return null;
   }
-  await webContents.session.cookies.flushStore();
+}
+
+/** What one host observation did to the jar it was merged into. */
+export interface BrowserObservedCookieMergeResult {
+  readonly applied: number;
+  /**
+   * Cookies that reached the jar and did not land: partitioned, unrepresentable
+   * by this shell, or refused by Chromium's own `cookies.set` validation. They
+   * are counted rather than thrown on: this is untrusted remote input over a
+   * jar the user is browsing with, and losing the other twenty cookies of a
+   * sign-in to one Chromium refusal would turn a bounded fidelity loss into a
+   * failed login with nothing to point at.
+   *
+   * The KEYS rather than a count, because the applier claimed every one of
+   * them as the sending host's before writing: a key the jar refused names a
+   * cookie that does not exist, and leaving the claim standing would hand the
+   * host an update right over whatever the user's own browsing later puts
+   * there.
+   */
+  readonly refused: readonly BrowserCookieKey[];
+}
+
+/**
+ * The ONE way a host's cookies reach the `primary` jar: what
+ * `applyBrowserObservedProfile` let through, merged in.
+ *
+ * Both host->jar doors arrive here - the observed frame and the
+ * `createElectronTab` seed, which used to have a `seedBrowserViewCookies` loop
+ * of its own with none of the checks. Application goes through Chromium's own
+ * `cookies.set`, which is what
+ * normalises the attributes away from anything the sender chose.
+ *
+ * Merge-only: it sets and never removes. The caller has already dropped the
+ * expired cookies that would otherwise reach `cookies.set` as deletes.
+ */
+export async function mergeObservedProfileCookies(
+  cookies: readonly ProtocolStorageCookie[],
+  browserSession: BrowserStorageSession,
+): Promise<BrowserObservedCookieMergeResult> {
+  let applied = 0;
+  const refused: BrowserCookieKey[] = [];
+  for (const cookie of cookies) {
+    // The key as the CALLER claimed it, not as the schema would normalise it:
+    // the claim the applier recorded was spelled this way, so a release has to
+    // be spelled the same way to find it.
+    const key = { domain: cookie.domain, name: cookie.name, path: cookie.path };
+    try {
+      // The parse is INSIDE the try, and that placement is the guard rather
+      // than a style choice: this schema's transforms THROW on a
+      // wire-legal-but-unrepresentable cookie (an empty name, an empty path, a
+      // path without a leading slash), and a thrown error escapes `safeParse`
+      // itself. Outside the try, one such cookie would abort the loop
+      // mid-frame - an attacker-chosen PREFIX of the frame applied, the flush
+      // skipped, and no count or trace of any of it.
+      const parsed = desktopStorageCookieSchema.parse(cookie);
+      if (!isUnpartitionedCookie(parsed)) {
+        refused.push(key);
+        continue;
+      }
+      await setStorageCookie(parsed, browserSession);
+      applied += 1;
+    } catch {
+      refused.push(key);
+    }
+  }
+  await browserSession.cookies.flushStore();
+  return { applied, refused };
+}
+
+/**
+ * A cookie's identity, as every path that has to match one across the jar, the
+ * wire and the ownership ledger spells it: (name, domain, path), which is what
+ * Chromium itself replaces by.
+ *
+ * The domain is CANONICALISED first. A key is
+ * minted from three sources that do not agree on spelling - the jar read
+ * (Chromium's own, always lowercase A-labels), the claim the applier records
+ * from the wire (a sender's `.Example.COM.`), and the release the observer
+ * performs from its own read - and an id that carried the sender's spelling
+ * made those three different keys. The consequence was not cosmetic: a claim
+ * nothing ever releases leaves the name permanently desktop-owned, and the
+ * ownership rule then refuses every later sign-in for it.
+ *
+ * The leading dot is PRESERVED, because it is not a spelling: it is the RFC
+ * 6265 difference between a host-only cookie and a domain cookie, two rows
+ * Chromium keeps apart.
+ */
+export function cookieKeyId(key: BrowserCookieKey): string {
+  return `${canonicalKeyDomain(key.domain)}\u0000${key.name}\u0000${key.path}`;
+}
+
+/**
+ * The shared canonicaliser plus this caller's own two rules: a leading dot is
+ * kept (it is the host-only/domain-cookie distinction, not a spelling), and a
+ * domain the canonicaliser refuses falls back to a plain lowercase - such a
+ * cookie is refused everywhere else, and an id still has to be a total function
+ * of its key.
+ */
+function canonicalKeyDomain(domain: string): string {
+  const leadingDot = domain.startsWith(".");
+  const host = leadingDot ? domain.slice(1) : domain;
+  const canonical = canonicalCookieHost(host) ?? host.toLowerCase();
+  return leadingDot ? `.${canonical}` : canonical;
+}
+
+/**
+ * The keys one registrable scope holds in this jar right now, subdomains
+ * included - Chromium's own `cookies.get` domain filter is subdomain-inclusive,
+ * which is what makes this the whole scope the ownership rule reasons over.
+ *
+ * Normalised through {@link browserStorageCookies}, so a key here is spelled
+ * exactly as the change observer and the ownership ledger spell it.
+ *
+ * KNOWN LIMIT, and the only open direction in the ownership rule: a jar cookie
+ * this shell cannot represent (a domain the URL parser cannot place at all)
+ * is simply absent here, so the rule reads it as a key - and a name - the jar
+ * does not hold. It is bounded by the same normalisation refusing to capture
+ * that cookie in the first place, so such a cookie never crosses to a host
+ * either. Case and IDN forms are no longer in that set: `readCookieDomain`
+ * normalises them the way Chromium's own jar does.
+ */
+export async function browserJarCookieKeys(
+  domain: string,
+  browserSession: BrowserStorageSession,
+): Promise<readonly BrowserCookieKey[]> {
+  // PROJECTED, not just narrowed by the return type: `browserStorageCookies`
+  // answers whole cookies, and TypeScript accepts the wider object for the
+  // three-field key type - so `value`, `expires`, `httpOnly`, `secure` and
+  // `sameSite` would reach every caller at runtime while the signature says
+  // "keys". This function exists so the ownership rule can ask what the jar
+  // HOLDS without reading what it holds.
+  return browserStorageCookies(
+    await browserSession.cookies.get({ domain }),
+  ).map((cookie) => ({
+    domain: cookie.domain,
+    name: cookie.name,
+    path: cookie.path,
+  }));
+}
+
+/**
+ * One parsed cookie into one jar, through Chromium's own `cookies.set`
+ * validation. Both application paths go through here - the tab seed and the
+ * observed merge - so neither can normalise or scope a cookie differently
+ * from the other.
+ */
+async function setStorageCookie(
+  cookie: DesktopStorageCookie,
+  browserSession: BrowserStorageSession,
+): Promise<void> {
+  await browserSession.cookies.set(
+    toElectronCookieSetDetails(toCookieSetDetails(cookie)),
+  );
+}
+
+/**
+ * Electron's cookies API has no partition key, so setting a partitioned cookie
+ * would land it in the UNPARTITIONED jar - readable from top-level sites CHIPS
+ * scoped it out of. Skipping it costs a re-login in that embedded context;
+ * restoring it merged is a cross-site leak.
+ */
+function isUnpartitionedCookie(cookie: DesktopStorageCookie): boolean {
+  return cookie.partitionKey === null;
+}
+
+/**
+ * "Clear cookies for this site" (spec §6.5): every cookie the
+ * registrable domain's subtree holds, plus the localStorage of every remembered
+ * origin under it, gone from one partition.
+ *
+ * The scope is the registrable domain, matched with the same RFC 6265 predicate
+ * the delta and the host's merge use - so what this removes is exactly the
+ * slice the delta afterwards reports as empty, and exactly what the host is
+ * allowed to tombstone. A cookie on `example.org` is untouched by a clear of
+ * `example.com`, and so is `notexample.com`.
+ *
+ * The removals fire the jar's own `changed` events, which coalesce into the
+ * one delta that tells the host the scope is now empty. Nothing suppresses
+ * them: the host-driven evict that once ran this under a per-domain
+ * suppression went away with the `primaryProfileEvict` frame, which was
+ * retired.
+ *
+ * `rememberedOrigins` is the capture coordinator's memory: cookies are
+ * enumerable from the jar, localStorage is not, so those are the only origins
+ * a clear can name. Clearing the jar is only half the work - the caller must
+ * follow with {@link BrowserPrimaryProfileSnapshotCoordinator.forgetOriginsUnder},
+ * or the coordinator keeps the origins it just cleared and the next capture
+ * uploads them back to the host.
+ */
+export async function clearBrowserSite(
+  domain: string,
+  browserSession: BrowserSiteClearSession,
+  rememberedOrigins: () => readonly string[],
+): Promise<void> {
+  try {
+    await removeBrowserSiteCookies(domain, browserSession.cookies);
+    await clearBrowserSiteLocalStorage(
+      domain,
+      browserSession,
+      rememberedOrigins,
+      null,
+    );
+  } finally {
+    // Cookie removals are held in memory until the store is flushed; without
+    // this, a quit right after the clear could resurrect the site's logins.
+    // In the `finally` because a clear that aborted part-way is exactly when
+    // the removals it did issue most need to be durable.
+    await browserSession.cookies.flushStore();
+  }
+}
+
+/** The localStorage half of a site clear: `clearStorageData`, nothing wider. */
+export interface BrowserSiteStorageClearer {
+  clearStorageData(options: ClearStorageDataOptions): Promise<void>;
+}
+
+/**
+ * The localStorage half of {@link clearBrowserSite}, on its own so the login
+ * import can run it per site between its cookie writes: every remembered
+ * origin in the site's scope is emptied, and nothing else, since localStorage
+ * is not enumerable and those origins are the only ones a clear can name. The
+ * coordinator's `forgetOriginsUnder` is still the caller's to follow with.
+ *
+ * Re-enumerated until nothing new turns up: each `clearStorageData` is an
+ * await, and a tile can land on another origin of the site while one is out.
+ * An origin named only after the first listing would otherwise keep its live
+ * localStorage - `forgetOriginsUnder` discards the READ of it, not the
+ * storage - for the next observation to capture back. Each origin is cleared
+ * once, so the loop ends when the listing stops growing - which a tile that
+ * keeps landing on origins the site has never shown can hold off for as long
+ * as it likes. The `signal` is the caller's bound on that: the login import
+ * passes its barrier's, read between origins, so an import the barrier has
+ * given up on stops clearing before the jar work queued behind it is
+ * admitted rather than overlapping it. A site clear has no such bound and
+ * passes `null`.
+ */
+export async function clearBrowserSiteLocalStorage(
+  domain: string,
+  browserSession: BrowserSiteStorageClearer,
+  rememberedOrigins: () => readonly string[],
+  signal: AbortSignal | null,
+): Promise<void> {
+  const cleared = new Set<string>();
+  for (;;) {
+    const pending = rememberedOrigins().filter(
+      (origin) => originInScope(origin, domain) && !cleared.has(origin),
+    );
+    if (pending.length === 0) return;
+    for (const origin of pending) {
+      if (signal?.aborted === true) {
+        throw new Error(
+          "The jar barrier expired before the site's localStorage was cleared",
+        );
+      }
+      cleared.add(origin);
+      await browserSession.clearStorageData({
+        origin,
+        storages: ["localstorage"],
+      });
+    }
+  }
+}
+
+/** The removal half of a site clear: `get` and `remove`, nothing wider. */
+export interface BrowserSiteCookieRemover {
+  get(filter: CookiesGetFilter): Promise<Cookie[]>;
+  remove(url: string, name: string): Promise<void>;
+}
+
+/**
+ * The cookie half of {@link clearBrowserSite}, on its own so the login import
+ * can replace one site's cookies key by key rather than as a slice. Answers
+ * how many cookies it removed. Flushing is the caller's: both callers batch
+ * several removals before one `flushStore`.
+ */
+export async function removeBrowserSiteCookies(
+  domain: string,
+  cookies: BrowserSiteCookieRemover,
+): Promise<number> {
+  const inScope = await listBrowserSiteCookies(domain, cookies);
+  for (const cookie of inScope) {
+    await removeBrowserCookie(cookie, cookies);
+  }
+  return inScope.length;
+}
+
+/**
+ * The jar's cookies for one site, through the same normalisation the capture
+ * path uses, so each names its own scope (host-only vs domain, path, secure)
+ * rather than a guess. A cookie that will not normalise has no URL to remove
+ * it by and no key to match it by, so it is left out: the login import and
+ * the site clear then act on the rest of the site instead of abandoning it
+ * on the first one.
+ */
+export async function listBrowserSiteCookies(
+  domain: string,
+  cookies: Pick<BrowserSiteCookieRemover, "get">,
+): Promise<readonly DesktopStorageCookie[]> {
+  const inScope = (await cookies.get({ domain })).filter((cookie) =>
+    cookieDomainInScope(cookie.domain ?? "", domain),
+  );
+  return inScope
+    .map((cookie) => safeStorageCookie(cookie))
+    .filter((cookie) => cookie !== null);
+}
+
+/**
+ * Electron removes by `{url, name}`, and that pair is WIDER than one cookie:
+ * every cookie of that name the URL would be sent - a domain cookie and a
+ * host-only cookie of the same name both match. The login import writes
+ * before it removes for exactly this reason (see `import-logins.ts`).
+ */
+export async function removeBrowserCookie(
+  cookie: DesktopStorageCookie,
+  cookies: Pick<BrowserSiteCookieRemover, "remove">,
+): Promise<void> {
+  await cookies.remove(cookieUrl(cookie), cookie.name);
+}
+
+/** {@link cookieKeyId} for a cookie the jar or a reader produced. */
+export function storageCookieKeyId(cookie: DesktopStorageCookie): string {
+  return cookieKeyId({
+    domain: cookie.domain,
+    name: cookie.name,
+    path: cookie.path,
+  });
+}
+
+/**
+ * Whether one remembered origin belongs to the site being cleared. The single
+ * definition of that scope: the clear and the coordinator's prune both read it,
+ * so neither can reach an origin the other keeps.
+ */
+function originInScope(origin: string, domain: string): boolean {
+  const host = originHost(origin);
+  return host !== null && cookieDomainInScope(host, domain);
+}
+
+function originHost(origin: string): string | null {
+  try {
+    return new URL(origin).hostname;
+  } catch {
+    return null;
+  }
 }
 
 function parseStorageState(value: ProtocolStorageState): DesktopStorageState {
   return desktopStorageStateSchema.parse(value);
 }
 
-function toCookieSetDetails(
+export function toCookieSetDetails(
   cookie: DesktopStorageCookie,
 ): BrowserCookieSetDetails {
   return {
     url: cookieUrl(cookie),
     name: cookie.name,
     value: cookie.value,
-    domain: cookie.domain.startsWith(".") ? cookie.domain : null,
+    // The CANONICAL domain attribute, not the sender's spelling: Chromium
+    // files the row under its own normalisation, so handing it
+    // `.Example.COM.` would have the jar read back a key that no longer
+    // matches what the applier claimed. `null` is host-only scope.
+    domain: cookie.domain.startsWith(".") ? `.${cookie.canonicalDomain}` : null,
     path: cookie.path,
     expirationDate: cookie.expires < 0 ? undefined : cookie.expires,
     httpOnly: cookie.httpOnly,
@@ -327,7 +846,7 @@ function toCookieSetDetails(
 }
 
 /** The one place null-as-absence meets Electron's optional `domain`. */
-function toElectronCookieSetDetails(
+export function toElectronCookieSetDetails(
   details: BrowserCookieSetDetails,
 ): CookiesSetDetails {
   const { domain, ...rest } = details;
@@ -468,28 +987,41 @@ function readNonEmptyString(value: string, field: string): string {
   throw new Error(`Browser storageState ${field} must be non-empty`);
 }
 
-function readCookieDomain(value: string | undefined): BrowserCookieDomain {
+/**
+ * Splits a wire cookie domain into the form it was sent in and the host form
+ * this shell builds URLs from.
+ *
+ * The canonical half is NORMALISED rather than merely checked. It used to
+ * demand the input already be the form the URL parser produces, which
+ * rejected three spellings a real jar
+ * hands out - `Example.COM`, the FQDN `example.com.`, and any Unicode IDN -
+ * and every cookie carrying one was silently dropped on the delta, clear and
+ * removal-key paths. The three RFC 6265 wire affordances (leading dot, trailing
+ * root dot, case) are stripped here and the rest is handed to the URL parser,
+ * which lowercases and IDNA-encodes exactly as Chromium's jar does. A domain
+ * the parser cannot place at all is still refused.
+ *
+ * Exported for the login import, which validates every cookie it reads through
+ * this same rule, so nothing it writes is a shape a later capture would
+ * refuse - and so an imported jar's spellings are normalised exactly as a
+ * seeded one's are.
+ */
+export function readCookieDomain(
+  value: string | undefined,
+): BrowserCookieDomain {
   const parsed = z.string().safeParse(value);
   if (!parsed.success) {
     throw new Error("Browser storageState cookie domain must be a string");
   }
   const domain = readNonEmptyString(parsed.data, "cookie domain");
-  const canonicalDomain = domain.startsWith(".") ? domain.slice(1) : domain;
-  if (
-    canonicalDomain.length === 0 ||
-    URL_SCOPE_SYNTAX_PATTERN.test(canonicalDomain)
-  ) {
-    throw new Error("Browser storageState cookie domain is invalid");
-  }
-  const url = new URL("https://traycer.invalid/");
-  url.hostname = canonicalDomain;
-  if (url.hostname !== canonicalDomain) {
+  const canonicalDomain = canonicalCookieHost(domain);
+  if (canonicalDomain === null) {
     throw new Error("Browser storageState cookie domain is invalid");
   }
   return { domain, canonicalDomain };
 }
 
-function readCookiePath(value: string | undefined): string {
+export function readCookiePath(value: string | undefined): string {
   const parsed = z.string().safeParse(value);
   if (!parsed.success) {
     throw new Error("Browser storageState cookie path must be a string");
@@ -504,7 +1036,6 @@ function readCookiePath(value: string | undefined): string {
   return path;
 }
 
-const URL_SCOPE_SYNTAX_PATTERN = /[@:/\\\s\x00-\x1F\x7F]/u;
 const CONTROL_OR_WHITESPACE_PATTERN = /[\s\x00-\x1F\x7F]/u;
 const LOCAL_STORAGE_SCRIPT = [
   "(() => {",

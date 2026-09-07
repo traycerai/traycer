@@ -368,12 +368,32 @@ function seedDocWithChats(doc: Y.Doc): void {
  * Mutation-check / row 13 helper: remote-delete a chat by removing its entry
  * from the chats map of the live epic Y.Doc.
  */
-function deleteChatFromLiveDoc(chatId: string): void {
+/**
+ * Edit the root replica through the root-state PORT.
+ *
+ * A registry handle is a production handle and has no `Y.Doc` - the replica is
+ * on the worker thread. So: decode the current state, mutate the decoded copy,
+ * and send back only the DIFF as a local edit. The diff is what keeps the edit
+ * on the replica's own lineage; applying a freshly-built document instead
+ * would merge a second, independently-created `chats` map beside the real one.
+ */
+async function editLiveRootDoc(mutate: (root: Y.Doc) => void): Promise<void> {
   const handle = __getOpenEpicRegistryForTests().peek(EPIC_ID);
   if (handle === null) throw new Error("expected a live epic session handle");
-  const chatsMap = getChatsMap(handle.doc);
-  if (chatsMap === null) throw new Error("expected a live chats map");
-  chatsMap.delete(chatId);
+  const scratch = new Y.Doc();
+  Y.applyUpdate(scratch, await handle.encodeRootState());
+  const before = Y.encodeStateVector(scratch);
+  mutate(scratch);
+  await handle.applyRootUpdate(Y.encodeStateAsUpdate(scratch, before), true);
+  scratch.destroy();
+}
+
+async function deleteChatFromLiveDoc(chatId: string): Promise<void> {
+  await editLiveRootDoc((root) => {
+    const chatsMap = getChatsMap(root);
+    if (chatsMap === null) throw new Error("expected a live chats map");
+    chatsMap.delete(chatId);
+  });
 }
 
 function markChatRecordListAuthoritative(): void {
@@ -383,12 +403,12 @@ function markChatRecordListAuthoritative(): void {
 }
 
 /** Row 13 recovery: re-insert a fresh Y.Map entry for the chat. */
-function restoreChatToLiveDoc(chat: EpicCanvasTileRef): void {
-  const handle = __getOpenEpicRegistryForTests().peek(EPIC_ID);
-  if (handle === null) throw new Error("expected a live epic session handle");
-  const chatsMap = getChatsMap(handle.doc);
-  if (chatsMap === null) throw new Error("expected a live chats map");
-  chatsMap.set(chat.id, buildChatYMap(chat));
+async function restoreChatToLiveDoc(chat: EpicCanvasTileRef): Promise<void> {
+  await editLiveRootDoc((root) => {
+    const chatsMap = getChatsMap(root);
+    if (chatsMap === null) throw new Error("expected a live chats map");
+    chatsMap.set(chat.id, buildChatYMap(chat));
+  });
 }
 
 const LEGEND_LIST_HEADER_PX = 40;
@@ -1740,11 +1760,11 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     expect(mountCount(CHAT_TRACKED.instanceId)).toBe(1);
     expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
 
-    act(() => {
+    await act(async () => {
       // Cloud absence is the successful empty mock above; answer the local
       // record plane too before using doc absence as deletion evidence.
       markChatRecordListAuthoritative();
-      deleteChatFromLiveDoc(CHAT_TRACKED.id);
+      await deleteChatFromLiveDoc(CHAT_TRACKED.id);
     });
 
     await waitFor(() => {
@@ -1755,8 +1775,8 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     });
     expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(1);
 
-    act(() => {
-      restoreChatToLiveDoc(CHAT_TRACKED);
+    await act(async () => {
+      await restoreChatToLiveDoc(CHAT_TRACKED);
     });
 
     await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);

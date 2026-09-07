@@ -17,13 +17,14 @@ export interface SessionImportScanHandle {
 }
 
 /**
- * Runs one scan for the lifetime of an open wizard and folds its frames into
- * the wizard reducer.
+ * Runs one scan while `active` and folds its frames into the wizard reducer.
  *
- * Subscribing is what makes the host read `~/.claude` and `~/.codex` at all
- * (D13: no background scanning), so this is deliberately mounted by the wizard
- * and torn down with it. Unlike the run, a dropped scan costs nothing but a
- * re-read, so there is no attach-and-resume story here.
+ * Subscribing is what makes the host read `~/.claude` and `~/.codex` at all,
+ * so the caller decides when that starts: the Settings dialog on open, the
+ * tour on its first act so the list is filled in by the time the import act
+ * is reached (D13, revised 2026-09-02). Nothing reads those folders outside
+ * one of those two surfaces. Unlike the run, a dropped scan costs nothing but
+ * a re-read, so there is no attach-and-resume story here.
  */
 export function useSessionImportScan(active: boolean): SessionImportScanHandle {
   const wsStreamClient = useWsStreamClient();

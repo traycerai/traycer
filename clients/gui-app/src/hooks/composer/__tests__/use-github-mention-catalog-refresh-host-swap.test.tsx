@@ -29,12 +29,14 @@ const request = vi.fn();
 const toastSpy = vi.fn();
 
 /** Mutable: the host swap under an in-flight request is the whole subject. */
-const readiness = vi.hoisted(() => ({ hostId: "host-1" }));
+const readiness = vi.hoisted(() => ({ hostId: "host-1", isReady: true }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: () => ({
     hostId: readiness.hostId,
     isReady: true,
+    hasRpcEndpoint: true,
+    canExecute: true,
   }),
 }));
 

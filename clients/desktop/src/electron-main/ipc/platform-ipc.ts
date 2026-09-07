@@ -11,6 +11,7 @@ import {
 } from "../app/window-effects";
 import {
   handleGetMetrics,
+  handleMeasureJsHeaps,
   handleTakeHeapSnapshot,
   handleTraceStart,
   handleTraceStop,
@@ -283,6 +284,10 @@ export function registerPlatformIpc(
 
   bridge.handleInvoke(RunnerHostInvoke.diagnosticsTakeHeapSnapshot, (event) => {
     return handleTakeHeapSnapshot(event);
+  });
+
+  bridge.handleInvoke(RunnerHostInvoke.diagnosticsMeasureJsHeaps, (event) => {
+    return handleMeasureJsHeaps(event);
   });
 
   bridge.handleInvoke(RunnerHostInvoke.diagnosticsTraceStart, () => {

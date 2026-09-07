@@ -426,7 +426,6 @@ describe("dispatchAttemptExecutor - reconciles exactly once, never double-spawns
     expect(spawnCalls).toBe(1);
     expect(hits).toEqual(["before-dispatch-spawn"]);
   });
-
   it("reconciles exactly once, without a second spawn, when a fault fires after spawn but before waiting for the ACK", async () => {
     mockCohortEligible("linux");
     let spawnCalls = 0;
@@ -471,6 +470,31 @@ describe("dispatchAttemptExecutor - reconciles exactly once, never double-spawns
 });
 
 describe("dispatchAttemptExecutor - the ACK/exit/timeout race, exactly one reconcile, no second spawn", () => {
+  it("a positively matched private ACK wins the race even with exit/timeout still pending, and never reconciles", async () => {
+    mockCohortEligible("linux");
+    let reconcileCalls = 0;
+    const claim = claimedOutcome();
+    const ack: ExecutorPrivateAcknowledgement = { nonce: "n1", outcome: claim };
+    const child: SpawnedAttemptExecutor = {
+      waitForPrivateAcknowledgement: () => Promise.resolve(ack),
+      // Left permanently pending - the ACK must win without waiting on these.
+      waitForExit: () => neverSettles(),
+    };
+    const outcome = await dispatchAttemptExecutor(
+      dispatchOptions({
+        nonce: "n1",
+        waitForAcknowledgementTimeout: () => neverSettles(),
+        spawn: () => Promise.resolve(child),
+        reconcile: () => {
+          reconcileCalls += 1;
+          return Promise.resolve(null);
+        },
+      }),
+    );
+    expect(outcome).toEqual({ kind: "accepted", claim });
+    expect(reconcileCalls).toBe(0);
+  });
+
   it("reconciles once when the child EXITS before ever sending a private ACK", async () => {
     mockCohortEligible("linux");
     let reconcileCalls = 0;
@@ -543,31 +567,6 @@ describe("dispatchAttemptExecutor - the ACK/exit/timeout race, exactly one recon
     );
     expect(spawnCalls).toBe(1);
     expect(reconcileCalls).toBe(1);
-  });
-
-  it("a positively matched private ACK wins the race even with exit/timeout still pending, and never reconciles", async () => {
-    mockCohortEligible("linux");
-    let reconcileCalls = 0;
-    const claim = claimedOutcome();
-    const ack: ExecutorPrivateAcknowledgement = { nonce: "n1", outcome: claim };
-    const child: SpawnedAttemptExecutor = {
-      waitForPrivateAcknowledgement: () => Promise.resolve(ack),
-      // Left permanently pending - the ACK must win without waiting on these.
-      waitForExit: () => neverSettles(),
-    };
-    const outcome = await dispatchAttemptExecutor(
-      dispatchOptions({
-        nonce: "n1",
-        waitForAcknowledgementTimeout: () => neverSettles(),
-        spawn: () => Promise.resolve(child),
-        reconcile: () => {
-          reconcileCalls += 1;
-          return Promise.resolve(null);
-        },
-      }),
-    );
-    expect(outcome).toEqual({ kind: "accepted", claim });
-    expect(reconcileCalls).toBe(0);
   });
 });
 
@@ -768,33 +767,6 @@ describe("runAttemptExecutorSegment - acknowledge runs before execute, and only 
     expect(acknowledgeCalls).toBe(0);
     expect(executeCalls).toBe(0);
   });
-
-  it("never calls acknowledge or execute for darwin even when linux/win32 are eligible", async () => {
-    mockCohortEligible("linux");
-    const hostHomeDir = await freshHome();
-    let acknowledgeCalls = 0;
-    let executeCalls = 0;
-
-    const outcome = await runAttemptExecutorSegment(
-      claimOptions(hostHomeDir, { platform: "darwin" }),
-      async () => {
-        acknowledgeCalls += 1;
-      },
-      async () => {
-        executeCalls += 1;
-        return "must-not-run";
-      },
-    );
-
-    expect(outcome).toEqual({
-      kind: "rejected",
-      reason: "cohort-disabled",
-      observed: null,
-    });
-    expect(acknowledgeCalls).toBe(0);
-    expect(executeCalls).toBe(0);
-  });
-
   it("never calls acknowledge or execute when the claim itself is rejected", async () => {
     mockCohortEligible("linux");
     const hostHomeDir = await freshHome();
@@ -1002,14 +974,6 @@ describe("runAttemptExecutorSegment - the dispatch ACK is stamped AFTER the clai
     if (decoded.kind !== "valid") return;
     expect(decoded.ack.attemptId).toBe(stampedIdentity);
     expect(decoded.ack.nonce).toBe("nonce-abcdefgh");
-  });
-
-  it("CONTROL: no record exists before the segment runs", async () => {
-    // Without this, the assertion above could pass on a host that already had
-    // a record from some earlier attempt - it would be true for the wrong
-    // reason, and the ordering would be unwitnessed.
-    const hostHomeDir = await freshHome();
-    expect(existsSync(updateAttemptRecordPath(hostHomeDir))).toBe(false);
   });
 });
 

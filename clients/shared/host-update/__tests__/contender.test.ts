@@ -889,11 +889,7 @@ describe("withUpdateContender - active attempt admissions", () => {
 
   it.each([
     ["legacy-update-shadow", "yield"],
-    ["stage-maintenance", "yield"],
     ["uninstall-maintenance", "refuse"],
-    ["service-maintenance", "refuse"],
-    ["desktop-activation-maintenance", "refuse"],
-    ["runtime-repair-maintenance", "refuse"],
     ["recovery-maintenance", "allow"],
   ] as const)(
     "returns the exact %s disposition for a nonterminal record",

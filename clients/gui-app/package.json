@@ -18,7 +18,8 @@
     "test": "bun scripts/run-tests.ts",
     "test:diff-edit-browser": "bun scripts/diff-edit-browser-regression.mjs",
     "test:pierre-tree-zoom-browser": "bun scripts/pierre-tree-zoom-browser-regression.mjs",
-    "test:react-compiler": "vitest run --config vitest.react-compiler.config.ts src/components/epic-canvas/comm-graph/__tests__/use-comm-graph-snapshot-cloud-authority.test.tsx",
+    "test:browser-overlay-compositor-probe": "bun scripts/browser-overlay-compositor-probe.mjs",
+    "test:react-compiler": "vitest run --config vitest.react-compiler.config.ts src/components/epic-canvas/comm-graph/__tests__/use-comm-graph-snapshot-cloud-authority.test.tsx src/hooks/epic/__tests__/use-epic-node-mutations.react-compiler.test.tsx",
     "test:watch": "vitest --config vitest.config.ts"
   },
   "dependencies": {
@@ -91,6 +92,7 @@
     "motion": "catalog:",
     "next-themes": "catalog:",
     "pathe": "catalog:",
+    "pdfjs-dist": "catalog:",
     "pdfmake": "catalog:",
     "posthog-js": "catalog:",
     "qrcode": "catalog:",

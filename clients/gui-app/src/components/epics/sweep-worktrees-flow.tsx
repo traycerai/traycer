@@ -107,12 +107,6 @@ interface SweepWorktreesFlowProps {
   readonly surfaceHostClient: HostClient<HostRpcRegistry> | null;
   /** The host id behind `surfaceHostClient` — the host the chip opens on. */
   readonly surfaceHostId: string | null;
-  /**
-   * Hosts the selected Task(s)' node records name, for the popover's badges
-   * and the empty state's redirect. Derived client-side from records the
-   * surface already holds; an empty set is legal and simply badges nothing.
-   */
-  readonly occupiedHostIds: ReadonlySet<string>;
   readonly taskTitle: string | null;
   readonly onOpenChange: (open: boolean) => void;
 }
@@ -218,7 +212,6 @@ export function SweepWorktreesFlow(props: SweepWorktreesFlowProps): ReactNode {
           ? null
           : {
               hostId: targetHostId,
-              occupiedHostIds: props.occupiedHostIds,
               unavailableHostId,
               onSwitch: (hostId) => {
                 setUnavailableHostId(null);

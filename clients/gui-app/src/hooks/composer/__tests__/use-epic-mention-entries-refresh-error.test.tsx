@@ -22,7 +22,7 @@ const refetches = vi.hoisted(
 );
 
 /** Mutable so a test can rebind the host mid-refresh without remounting. */
-const readiness = vi.hoisted(() => ({ hostId: "host-1" }));
+const readiness = vi.hoisted(() => ({ hostId: "host-1", isReady: true }));
 
 vi.mock("@/lib/host-error-toast", () => ({
   toastFromHostError: (error: HostRpcError, fallback: string) => {
@@ -37,6 +37,8 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
     hostId: readiness.hostId,
     requestContextUserId: "user-1",
     isReady: true,
+    hasRpcEndpoint: true,
+    canExecute: true,
   }),
 }));
 

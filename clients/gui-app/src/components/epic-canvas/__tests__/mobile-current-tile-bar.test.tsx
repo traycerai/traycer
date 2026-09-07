@@ -1,13 +1,19 @@
 import "../../../../__tests__/test-browser-apis";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { MobileCurrentTileBar } from "@/components/epic-canvas/mobile/mobile-current-tile-bar";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
@@ -36,7 +42,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 }));
 
 const mocks = vi.hoisted(() => ({
-  handle: { current: null as OpenEpicStoreHandle | null },
+  handle: { current: null as OpenedStoreForTest | null },
 }));
 
 const mutateSpies = vi.hoisted(() => ({
@@ -62,6 +68,10 @@ function makeMutateAsync<TVariables>(
 // stay mocked (rather than the `useSwitcherRename` mapping itself), which
 // exercises the real kind -> mutation mapping in `use-switcher-rename.ts`.
 vi.mock("@/providers/use-open-epic-handle", () => ({
+  // The chat write-routing gate reads the session through the
+  // NON-throwing accessor. `null` is the honest double here: this suite
+  // mounts no epic store, and no session means no epic write path to gate.
+  useMaybeOpenEpicHandle: () => null,
   useOpenEpicHandle: () => {
     if (mocks.handle.current === null) throw new Error("no handle seeded");
     return mocks.handle.current;
@@ -155,7 +165,7 @@ function makeMeta(): SnapshotMetaEpic {
 /** A live session for "epic-1" - no nodes seeded, since these tests only
  * assert on the RPC call args, and `useSwitcherRename` fires the RPC
  * regardless of whether `beginRenameMutation` finds a row to overlay. */
-function newSession(): OpenEpicStoreHandle {
+function newSession(): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
@@ -168,11 +178,21 @@ function newSession(): OpenEpicStoreHandle {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: "epic-1",
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   if (captured.value === null) throw new Error("factory not invoked");
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
@@ -213,12 +233,16 @@ describe("<MobileCurrentTileBar />", () => {
     );
   });
 
-  it("commits an edited title through the rename mutation, keyed to the tile kind", () => {
+  it("commits an edited title through the rename mutation, keyed to the tile kind", async () => {
     render(<MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />);
     const input = openEdit();
     fireEvent.change(input, { target: { value: "New title" } });
     fireEvent.blur(input);
-    expect(mutateSpies.renameChat).toHaveBeenCalledTimes(1);
+    // AWAITED: the commit stamps the overlay through the worker's queue first,
+    // so the mutation fires a round trip after the blur rather than inside it.
+    await waitFor(() =>
+      expect(mutateSpies.renameChat).toHaveBeenCalledTimes(1),
+    );
     expect(mutateSpies.renameChat).toHaveBeenCalledWith({
       epicId: "epic-1",
       chatId: "chat-1",

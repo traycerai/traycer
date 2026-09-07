@@ -1,6 +1,8 @@
 import {
+  CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
   checkCompatibility,
   isRpcErrorCode,
+  UNARY_CAPABILITY_IDEMPOTENCY_KEY,
   type ConnectionManifest,
   type FatalErrorDetails,
   type MethodVersionRegistry,
@@ -61,6 +63,7 @@ import {
   MAX_TERMINAL_STREAM_IDS,
   ATTACH_ACK_TIMEOUT_MS,
   NOISE_HANDSHAKE_TIMEOUT_MS,
+  PLAN_RESTRICTED_FATAL_CODE,
   SESSION_OPEN_ACK_TIMEOUT_MS,
   RECONNECT_INITIAL_BACKOFF_MS,
   RECONNECT_MAX_BACKOFF_MS,
@@ -395,6 +398,7 @@ export interface IRemoteSession<
   sendUnary<Method extends keyof RpcRegistry & string>(
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
+    idempotencyKey: string | null,
     abortSignal: AbortSignal | null,
     callerAgentId: string | null,
     /**
@@ -404,9 +408,23 @@ export interface IRemoteSession<
      * rather than re-scoring every unary this session carries.
      */
     responseTimeoutMs: number | undefined,
+    /**
+     * This send is a REPLAY whose predecessor was only retryable because the
+     * key was negotiated (`HostRequestOptions.replayMustBeKeyed` in
+     * `host-messenger.ts`, which documents the full rule). The key-stripping
+     * this session does for a host that predates the capability is a
+     * legitimate downgrade on a FIRST send and a double-execution on this
+     * one, so a stripped key here refuses instead of dispatching.
+     */
+    replayMustBeKeyed: boolean,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>>;
   subscribe<Method extends keyof StreamRegistry & string>(
     method: Method,
+    params: ParamsOf<StreamRegistry, Method>,
+  ): IStreamSession;
+  subscribeAtVersion<Method extends keyof StreamRegistry & string>(
+    method: Method,
+    schemaVersion: SchemaVersion,
     params: ParamsOf<StreamRegistry, Method>,
   ): IStreamSession;
   subscribeWithParamsProvider<Method extends keyof StreamRegistry & string>(
@@ -544,6 +562,8 @@ interface PendingUnary {
   readonly hostCanonical: SchemaVersion;
   readonly methodRegistry: MethodVersionRegistry;
   readonly onWireRequest: unknown;
+  /** This connection promised replay-by-key, so an unheard result may retry. */
+  readonly replaySafe: boolean;
   readonly resolve: (result: unknown) => void;
   readonly reject: (error: HostRpcError) => void;
   timer: TimerHandle | null;
@@ -566,6 +586,7 @@ interface ActiveConnection {
    */
   hostRpcMerged: ConnectionManifest | null;
   credentialUpdateSupported: boolean;
+  idempotencyKeySupported: boolean;
   /**
    * Whether the HOST advertised that it can inflate compressed frames, i.e.
    * whether frames this client sends may set `MuxFlags.COMPRESSED`. Starts
@@ -1007,9 +1028,11 @@ export class RemoteSession<
   async sendUnary<Method extends keyof RpcRegistry & string>(
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
+    idempotencyKey: string | null,
     abortSignal: AbortSignal | null,
     callerAgentId: string | null,
     responseTimeoutMs: number | undefined,
+    replayMustBeKeyed: boolean,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     this.start();
     const requestId = this.options.requestId();
@@ -1076,6 +1099,9 @@ export class RemoteSession<
           requestId,
           method,
           fatalDetails: null,
+          // Pre-send: the frame was never enqueued, so the next attempt is a
+          // first send however it is keyed.
+          replaySafetyFromKey: false,
         }),
       );
     }
@@ -1088,6 +1114,8 @@ export class RemoteSession<
           requestId,
           method,
           fatalDetails: null,
+          // Pre-send, same as the detached case above.
+          replaySafetyFromKey: false,
         }),
       );
     }
@@ -1116,6 +1144,8 @@ export class RemoteSession<
         requestId,
         callerAgentId,
         responseTimeoutMs,
+        idempotencyKey,
+        replayMustBeKeyed,
       );
     }
 
@@ -1129,6 +1159,8 @@ export class RemoteSession<
       requestId,
       callerAgentId,
       responseTimeoutMs,
+      idempotencyKey,
+      replayMustBeKeyed,
     ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
 
@@ -1237,7 +1269,12 @@ export class RemoteSession<
     };
     return this.isClosed()
       ? new HostTransportFailureError(notReady)
-      : new RetryableTransportError(notReady);
+      : new RetryableTransportError({
+          ...notReady,
+          // "Not ready" is decided before anything is enqueued, so this
+          // retryability is the no-dispatch guarantee, not a key.
+          replaySafetyFromKey: false,
+        });
   }
 
   /**
@@ -1259,6 +1296,8 @@ export class RemoteSession<
     requestId: string,
     callerAgentId: string | null,
     responseTimeoutMs: number | undefined,
+    idempotencyKey: string | null,
+    replayMustBeKeyed: boolean,
   ): Promise<unknown> {
     let prepared: { onWireVersion: SchemaVersion; onWirePayload: unknown };
     try {
@@ -1274,11 +1313,48 @@ export class RemoteSession<
       return Promise.reject(asHostRpcError(cause, requestId, method));
     }
 
+    const wireIdempotencyKey = connection.idempotencyKeySupported
+      ? idempotencyKey
+      : null;
+    if (replayMustBeKeyed && wireIdempotencyKey === null) {
+      // Decided BEFORE `allocateStreamId` so a refusal costs no stream id: it
+      // reads `connection.idempotencyKeySupported` and nothing else, so
+      // hoisting it above the allocation changes no other ordering.
+      //
+      // An earlier attempt of this call went out keyed and its outcome is
+      // unknown; the only reason it was replayable at all is that THAT
+      // connection deduplicates the key. This connection does not - either
+      // the caller never had a key, or the re-dial landed on a host
+      // incarnation whose handshake omits the capability - so dispatching
+      // would execute a mutation the host may already have run. Ambiguous
+      // (`HostTransportFailureError`, not the retryable subclass) is the
+      // honest answer: the first attempt genuinely may have committed, and
+      // this session must not turn "may have" into "did, twice".
+      return Promise.reject(
+        new HostTransportFailureError({
+          code: "RPC_ERROR",
+          message: `Remote session cannot honour the idempotency key a replay of '${method}' requires`,
+          requestId,
+          method,
+          fatalDetails: null,
+        }),
+      );
+    }
     const streamId = this.allocateStreamId();
+    const replaySafe = wireIdempotencyKey !== null;
     return new Promise<unknown>((resolve, reject) => {
       {
         const timer = setTimeout(() => {
-          this.rejectUnary(streamId, unaryTimeoutError(requestId, method));
+          this.rejectUnary(
+            streamId,
+            replaySafe
+              ? retryableUnaryFailure(
+                  requestId,
+                  method,
+                  `Remote unary '${method}' timed out awaiting a response`,
+                )
+              : unaryTimeoutError(requestId, method),
+          );
         }, responseTimeoutMs ?? this.options.unaryResponseMs);
         this.pendingUnary.set(streamId, {
           requestId,
@@ -1287,6 +1363,7 @@ export class RemoteSession<
           hostCanonical,
           methodRegistry,
           onWireRequest: prepared.onWirePayload,
+          replaySafe,
           resolve,
           reject,
           timer,
@@ -1302,7 +1379,7 @@ export class RemoteSession<
               schemaVersion: prepared.onWireVersion,
               params: prepared.onWirePayload,
               callerAgentId,
-              idempotencyKey: null,
+              idempotencyKey: wireIdempotencyKey,
             },
             binary: null,
           });
@@ -1322,7 +1399,19 @@ export class RemoteSession<
     method: Method,
     params: ParamsOf<StreamRegistry, Method>,
   ): IStreamSession {
-    return this.subscribeWithParamsProvider(method, () => params);
+    return this.subscribeWithParamsProviderInternal(method, () => params, null);
+  }
+
+  subscribeAtVersion<Method extends keyof StreamRegistry & string>(
+    method: Method,
+    schemaVersion: SchemaVersion,
+    params: ParamsOf<StreamRegistry, Method>,
+  ): IStreamSession {
+    return this.subscribeWithParamsProviderInternal(
+      method,
+      () => params,
+      schemaVersion,
+    );
   }
 
   /**
@@ -1335,6 +1424,20 @@ export class RemoteSession<
     method: Method,
     paramsProvider: () => ParamsOf<StreamRegistry, Method>,
   ): IStreamSession {
+    return this.subscribeWithParamsProviderInternal(
+      method,
+      paramsProvider,
+      null,
+    );
+  }
+
+  private subscribeWithParamsProviderInternal<
+    Method extends keyof StreamRegistry & string,
+  >(
+    method: Method,
+    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
+    requiredSchemaVersion: SchemaVersion | null,
+  ): IStreamSession {
     this.start();
     const streamId = this.allocateStreamId();
     const stream = new LogicalStream({
@@ -1344,6 +1447,7 @@ export class RemoteSession<
       // Recomputed against the host manifest at (re)subscribe; a provisional
       // client-canonical version is fine until then.
       schemaVersion: this.clientStreamCanonical(method),
+      requiredSchemaVersion,
       qos: qosForStreamMethod(method),
       port: this,
     });
@@ -1778,6 +1882,7 @@ export class RemoteSession<
       hostManifest: null,
       hostRpcMerged: null,
       credentialUpdateSupported: false,
+      idempotencyKeySupported: false,
       bodyCompressionSupported: false,
       hostAttached: true,
     };
@@ -2073,6 +2178,7 @@ export class RemoteSession<
       capabilities: [
         SESSION_CAPABILITY_BODY_COMPRESSION,
         SESSION_CAPABILITY_FINE_CREDITS,
+        CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
       ],
       clientIdentity: this.clientIdentity,
     };
@@ -2296,6 +2402,8 @@ export class RemoteSession<
     requestId: string,
     callerAgentId: string | null,
     responseTimeoutMs: number | undefined,
+    idempotencyKey: string | null,
+    replayMustBeKeyed: boolean,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     return resolveUnavailableMethodDegrade({
       registry: this.options.rpcRegistry,
@@ -2326,6 +2434,11 @@ export class RemoteSession<
           // contract, so it keeps that caller's budget rather than silently
           // reverting to the shared default.
           responseTimeoutMs,
+          idempotencyKey,
+          // Same caller request on an older contract, so it is the same
+          // replay: a degrade must not become the unkeyed dispatch the
+          // direct path just refused.
+          replayMustBeKeyed,
         ),
     }) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
@@ -2376,6 +2489,9 @@ export class RemoteSession<
     connection.hostRpcMerged = hostRpcMerged;
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
+    );
+    connection.idempotencyKeySupported = parsed.data.capabilities.includes(
+      UNARY_CAPABILITY_IDEMPOTENCY_KEY,
     );
     connection.bodyCompressionSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_BODY_COMPRESSION,
@@ -2586,22 +2702,41 @@ export class RemoteSession<
       this.clientManifests.stream,
       hostManifest.stream,
     );
+    const requiredVersion = stream.requiredSchemaVersion;
     const clientCanonical = selectedClientManifest[stream.method];
     const hostCanonical = hostManifest.stream[stream.method];
-    const compat = checkStreamMethodCompatibility(
-      this.options.streamRegistry,
-      selectedClientManifest,
-      hostManifest.stream,
-      "client",
-      stream.method,
-    );
+    const pinnedVersionSupported =
+      requiredVersion === null ||
+      (hostCanonical !== undefined &&
+        hostCanonical.major === requiredVersion.major &&
+        hostCanonical.minor >= requiredVersion.minor);
+    const compat = pinnedVersionSupported
+      ? checkStreamMethodCompatibility(
+          this.options.streamRegistry,
+          selectedClientManifest,
+          hostManifest.stream,
+          "client",
+          stream.method,
+        )
+      : {
+          ok: false as const,
+          details: incompatibleStreamDetails(
+            stream.method,
+            clientCanonical,
+            hostCanonical,
+          ),
+        };
     if (
       !compat.ok ||
       clientCanonical === undefined ||
       hostCanonical === undefined
     ) {
       const details: FatalErrorDetails = compat.ok
-        ? incompatibleStreamDetails(stream.method)
+        ? incompatibleStreamDetails(
+            stream.method,
+            clientCanonical,
+            hostCanonical,
+          )
         : compat.details;
       stream.goFatal(details);
       this.subscriptions.delete(stream.streamId);
@@ -2906,17 +3041,9 @@ export class RemoteSession<
     // stays - a resolver that keeps failing its init must keep climbing the
     // backoff across session drops, not restart it.
     this.clearAllStreamReopens();
-    // In-flight unary calls are post-send from the caller's view → not
-    // retryable (the host may have applied them). Reject, never replay.
-    this.rejectAllPendingUnary(
-      new HostRpcError({
-        code: "RPC_ERROR",
-        message: "Remote session dropped before the response arrived",
-        requestId: "session-drop",
-        method: "",
-        fatalDetails: null,
-      }),
-    );
+    // Only requests carrying a key this connection negotiated are replayable.
+    // Unkeyed calls retain the old ambiguous-outcome failure on first drop.
+    this.rejectPendingOnConnectionDrop();
     // Callers parked awaiting THIS attach are still pre-send, so they keep
     // their retry license - but they must be released rather than left to
     // ride an unbounded number of further attempts inside one call.
@@ -3933,6 +4060,31 @@ export class RemoteSession<
     }
   }
 
+  private rejectPendingOnConnectionDrop(): void {
+    for (const [streamId, entry] of Array.from(this.pendingUnary)) {
+      if (entry.timer !== null) {
+        clearTimeout(entry.timer);
+      }
+      this.pendingUnary.delete(streamId);
+      this.outboundSeq.delete(streamId);
+      entry.reject(
+        entry.replaySafe
+          ? retryableUnaryFailure(
+              entry.requestId,
+              entry.method,
+              "Remote session dropped before the response arrived",
+            )
+          : new HostTransportFailureError({
+              code: "RPC_ERROR",
+              message: "Remote session dropped before the response arrived",
+              requestId: entry.requestId,
+              method: entry.method,
+              fatalDetails: null,
+            }),
+      );
+    }
+  }
+
   // ---- Small helpers ----------------------------------------------------- //
 
   private markStreamsReconnecting(): void {
@@ -4453,6 +4605,28 @@ function unaryTimeoutError(
   });
 }
 
+/**
+ * The POST-SEND retryable failure: a timeout or a connection drop for a
+ * request whose frame is already on the wire. Both call sites reach it only
+ * on `replaySafe`, i.e. only because the connection negotiated the key - so
+ * every error minted here carries `replaySafetyFromKey: true`, and the retry
+ * it licenses is one the next attempt must itself key.
+ */
+function retryableUnaryFailure(
+  requestId: string,
+  method: string,
+  message: string,
+): RetryableTransportError {
+  return new RetryableTransportError({
+    code: "RPC_ERROR",
+    message,
+    requestId,
+    method,
+    fatalDetails: null,
+    replaySafetyFromKey: true,
+  });
+}
+
 function asHostRpcError(
   cause: unknown,
   requestId: string,
@@ -4476,7 +4650,7 @@ function asHostRpcError(
  * paid-plan upsell on this instead of a generic session failure. Free-string
  * `FatalErrorDetails.code` space, so no protocol change is involved.
  */
-export const PLAN_RESTRICTED_FATAL_CODE = "PLAN_RESTRICTED";
+export { PLAN_RESTRICTED_FATAL_CODE } from "./config";
 
 function planRestrictedFatalDetails(): FatalErrorDetails {
   return {
@@ -4487,11 +4661,27 @@ function planRestrictedFatalDetails(): FatalErrorDetails {
   };
 }
 
-function incompatibleStreamDetails(method: string): FatalErrorDetails {
+function incompatibleStreamDetails(
+  method: string,
+  clientCanonical: SchemaVersion | undefined,
+  hostCanonical: SchemaVersion | undefined,
+): FatalErrorDetails {
   return {
     code: "INCOMPATIBLE",
     reason: `Stream method '${method}' is not compatible with the host`,
-    incompatibleMethods: null,
+    incompatibleMethods: [
+      {
+        method,
+        clientCanonical: clientCanonical ?? null,
+        hostCanonical: hostCanonical ?? null,
+        blocking:
+          clientCanonical === undefined
+            ? "client-missing-method"
+            : hostCanonical === undefined
+              ? "host-missing-method"
+              : "no-bridge",
+      },
+    ],
     upgradeGuidance: null,
   };
 }

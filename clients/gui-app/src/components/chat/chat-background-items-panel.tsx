@@ -1104,6 +1104,7 @@ function SessionStopConfirmDialog(props: {
   if (props.escalation === null) return null;
   return (
     <ConfirmDestructiveDialog
+      blockedReason={null}
       open={props.open}
       onOpenChange={props.onOpenChange}
       title={`Stop the ${props.escalation.providerLabel} session?`}

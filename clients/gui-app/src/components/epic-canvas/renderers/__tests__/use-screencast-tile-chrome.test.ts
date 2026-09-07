@@ -47,6 +47,7 @@ function renderChrome(
   const view = renderHook(
     (props: ChromeHookProps) =>
       useScreencastTileChrome({
+        profile: "primary",
         navState: props.navState,
         initialUrl: props.initialUrl,
         disabled: false,

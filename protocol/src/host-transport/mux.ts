@@ -326,10 +326,10 @@ export interface UnaryRequestPayload {
    */
   readonly callerAgentId: string | null;
   /**
-   * Reserved for later per-method dedup. v1 has no host dedup machinery, so the
-   * authoritative wire value is `null`; non-null values fail schema validation.
+   * Stable client command id when the host advertised unary idempotency, or
+   * `null` for ordinary/unnegotiated requests.
    */
-  readonly idempotencyKey: null;
+  readonly idempotencyKey: string | null;
 }
 
 export interface WireRpcErrorDetails {
@@ -407,7 +407,7 @@ export const unaryRequestPayloadSchema: z.ZodType<UnaryRequestPayload> =
     schemaVersion: schemaVersionSchema,
     params: z.unknown(),
     callerAgentId: z.string().nullable().default(null),
-    idempotencyKey: z.null(),
+    idempotencyKey: z.string().min(1).nullable(),
   });
 
 export const unaryResponsePayloadSchema: z.ZodType<UnaryResponsePayload> =

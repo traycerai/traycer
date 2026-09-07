@@ -34,13 +34,18 @@ const CLAIM: RoleClaim = {
   claimedAt: 1,
 };
 
-function renderHover(overrides: {
+interface HoverOverrides {
   readonly hostId: string | null;
   readonly ownerKind: "chat" | "terminal-agent" | null;
   readonly ownerHostUnreachable: boolean;
   readonly roleClaims: readonly RoleClaim[];
   readonly side: "top" | "right" | "bottom" | "left";
-}) {
+  readonly extraContent: React.ReactElement | null;
+}
+
+const NO_EXTRA: Pick<HoverOverrides, "extraContent"> = { extraContent: null };
+
+function renderHover(overrides: HoverOverrides) {
   render(
     <TooltipProvider>
       <AgentHoverTooltip
@@ -52,6 +57,7 @@ function renderHover(overrides: {
         ownerHostUnreachable={overrides.ownerHostUnreachable}
         ownerKind={overrides.ownerKind}
         roleClaims={overrides.roleClaims}
+        extraContent={overrides.extraContent}
         side={overrides.side}
       />
     </TooltipProvider>,
@@ -76,6 +82,7 @@ describe("AgentHoverTooltip", () => {
       ownerKind: "chat",
       roleClaims: [CLAIM],
       side: "top",
+      ...NO_EXTRA,
     });
 
     expect(
@@ -101,6 +108,7 @@ describe("AgentHoverTooltip", () => {
       ownerKind: "chat",
       roleClaims: [CLAIM],
       side: "top",
+      ...NO_EXTRA,
     });
 
     expect(screen.queryByTestId("worktree-owner-tooltip")).toBeNull();
@@ -120,6 +128,7 @@ describe("AgentHoverTooltip", () => {
       ownerKind: "chat",
       roleClaims: [],
       side: "top",
+      ...NO_EXTRA,
     });
 
     const trigger = screen.getByRole("button", { name: "Reviewer" });
@@ -134,6 +143,7 @@ describe("AgentHoverTooltip", () => {
       ownerKind: null,
       roleClaims: [CLAIM],
       side: "top",
+      ...NO_EXTRA,
     });
 
     expect(screen.queryByTestId("worktree-owner-tooltip")).toBeNull();
@@ -156,12 +166,37 @@ describe("AgentHoverTooltip", () => {
       ownerKind: null,
       roleClaims: [],
       side: "top",
+      ...NO_EXTRA,
     });
 
     expect(screen.queryByTestId("worktree-owner-tooltip")).toBeNull();
     const trigger = screen.getByRole("button", { name: "Reviewer" });
     await userEvent.hover(trigger);
     expect(screen.queryByTestId("agent-role-hover-content")).toBeNull();
+  });
+
+  it("puts the caller's own content under the role content", () => {
+    // The office adds a line of its own beneath the shared card. Both have to
+    // survive: the floor's posture line replacing the roles would be a
+    // regression the surfaces could not see in each other.
+    renderHover({
+      hostId: "host-a",
+      ownerHostUnreachable: false,
+      ownerKind: "chat",
+      roleClaims: [CLAIM],
+      side: "top",
+      extraContent: (
+        <span data-testid="caller-extra">Working · large model</span>
+      ),
+    });
+
+    const supplemental = screen.getByTestId("worktree-supplemental");
+    expect(supplemental.textContent).toContain("Edge owner");
+    expect(supplemental.textContent).toContain("Working · large model");
+    // Under, not over: the shared card's own content comes first.
+    const roles = supplemental.textContent.indexOf("Edge owner");
+    const own = supplemental.textContent.indexOf("Working");
+    expect(roles).toBeLessThan(own);
   });
 
   it("keeps the trigger's own click working under the tooltip", async () => {
@@ -181,6 +216,7 @@ describe("AgentHoverTooltip", () => {
           ownerHostUnreachable={false}
           ownerKind={null}
           roleClaims={[CLAIM]}
+          extraContent={null}
           side="top"
         />
       </TooltipProvider>,
@@ -199,10 +235,65 @@ describe("AgentHoverTooltip", () => {
       ownerKind: "chat",
       roleClaims: [CLAIM],
       side: "right",
+      ...NO_EXTRA,
     });
 
     expect(
       screen.getByTestId("worktree-owner-tooltip").getAttribute("data-side"),
     ).toBe("right");
+  });
+
+  it("keeps the agent name alongside extra content in the fallback tooltip", async () => {
+    // Regression coverage: the fallback branch used to drop the name whenever
+    // a caller supplied `extraContent`, because the label collapsed to just
+    // the extra node. Both have to survive - the extra line is appended
+    // UNDER the name, never in place of it.
+    renderHover({
+      hostId: null,
+      ownerKind: null,
+      ownerHostUnreachable: false,
+      roleClaims: [],
+      side: "top",
+      extraContent: (
+        <span data-testid="caller-extra">Working · large model</span>
+      ),
+    });
+
+    await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+
+    // Wait for the tooltip content to actually mount before counting - the
+    // trigger's own "Reviewer" already exists in the document, so a plain
+    // findAllByText resolves on that single match without ever waiting for
+    // the tooltip to open.
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("Reviewer");
+    expect(tooltip.textContent).toContain("Working · large model");
+    // One "Reviewer" is the trigger button's own label; the other is the
+    // tooltip content TooltipWrapper renders on hover - so finding two is
+    // what proves the name reached the tooltip rather than just the trigger.
+    expect(screen.getAllByText("Reviewer")).toHaveLength(2);
+  });
+
+  it("keeps the agent name alongside extra content when the owner host is unreachable", async () => {
+    // Same fallback branch, reached through the OTHER gate: an owner host that
+    // cannot be reached degrades from the rich card to this same tooltip, so
+    // the name-plus-extra guarantee has to hold here too.
+    renderHover({
+      hostId: "host-a",
+      ownerKind: "chat",
+      ownerHostUnreachable: true,
+      roleClaims: [],
+      side: "top",
+      extraContent: (
+        <span data-testid="caller-extra">Working · large model</span>
+      ),
+    });
+
+    await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("Reviewer");
+    expect(tooltip.textContent).toContain("Working · large model");
+    expect(screen.getAllByText("Reviewer")).toHaveLength(2);
   });
 });

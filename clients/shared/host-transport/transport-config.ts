@@ -12,3 +12,16 @@
  * transport failure within one backoff budget.
  */
 export const DEFAULT_DIAL_TIMEOUT_MS = 10_000;
+
+/**
+ * The rest of one stream connection's timings, beside the dial timeout for the
+ * same reason: main's `browser.sessions` transport and the renderer's durable
+ * one must behave identically on the wire, and they used to hold five copied
+ * literals each. A drift here is a stream that pings on a different cadence
+ * from the one the host closes on.
+ */
+export const DEFAULT_OPEN_ACK_TIMEOUT_MS = 10_000;
+export const DEFAULT_PING_INTERVAL_MS = 25_000;
+export const DEFAULT_PONG_TIMEOUT_MS = 60_000;
+export const DEFAULT_INITIAL_BACKOFF_MS = 1_000;
+export const DEFAULT_MAX_BACKOFF_MS = 30_000;

@@ -13,18 +13,10 @@ export type InterviewReviewFidelity =
   | "no-answer"
   | "draft";
 
-export interface InterviewDisplayFraming {
-  readonly title: string | null;
-  readonly description: string | null;
-}
-
 export interface InterviewReviewInput {
   /** Stable persisted interview block identity; never user-facing text. */
   readonly blockId: string;
   readonly status: "streaming" | "completed" | "errored";
-  readonly toolName: string | null;
-  readonly title: string | null;
-  readonly description: string | null;
   readonly questions: ReadonlyArray<InterviewQuestion>;
   readonly answers: ReadonlyArray<InterviewAnswer>;
   readonly draftAnswers: ReadonlyArray<InterviewAnswer>;
@@ -66,8 +58,6 @@ export interface InterviewReviewDelivery {
  */
 export type InterviewReviewFieldKind =
   | "summary"
-  | "title"
-  | "description"
   | "question-header"
   | "question-text"
   | "option-label"
@@ -97,7 +87,6 @@ export interface InterviewReviewSearchField {
 }
 
 export interface InterviewReviewModel {
-  readonly framing: InterviewDisplayFraming;
   readonly outcome: "answered" | "skipped" | "failed" | "unknown" | "carried";
   readonly summary: string;
   /** Outcome-aware expanded-card progress; rendering must not recalculate it. */
@@ -122,21 +111,6 @@ interface AnswerAssociationResult {
   readonly unassociated: ReadonlyArray<InterviewAnswer>;
 }
 
-// A title is useful only when it identifies the interview as a whole. These
-// are provider/tool labels that historically leaked into the card unchanged.
-// Keep the compatibility table beside the model so live and historical cards
-// use the same suppression decision rather than each growing JSX exceptions.
-const GENERIC_INTERVIEW_FRAMING = new Set([
-  "askuserquestion",
-  "requestuserinput",
-  "question",
-  "input needed",
-  "need input",
-  "needs your input",
-  "codex needs your input",
-  "assistant needs your input",
-]);
-
 function meaningfulText(value: string | null): string | null {
   const trimmed = value?.trim() ?? "";
   return trimmed.length > 0 ? trimmed : null;
@@ -148,50 +122,6 @@ function stableQuestionId(value: string | null): string | null {
 
 function hasMeaningfulAnswerContent(answer: InterviewAnswer): boolean {
   return answer.values.length > 0 || meaningfulText(answer.notes) !== null;
-}
-
-function normalizedFraming(value: string): string {
-  return value
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
-    .trim();
-}
-
-function isGenericInterviewFraming(
-  value: string,
-  toolName: string | null,
-): boolean {
-  const normalized = normalizedFraming(value);
-  if (GENERIC_INTERVIEW_FRAMING.has(normalized)) return true;
-  if (toolName === null || normalized.length === 0) return false;
-  const normalizedToolName = normalizedFraming(toolName);
-  return normalizedToolName.length > 0 && normalized === normalizedToolName;
-}
-
-/**
- * Produces only human-facing interview framing. Tool names and known provider
- * boilerplate are treated as absent, leaving question headers as page-level
- * orientation instead of manufacturing a generic card title.
- */
-export function displayInterviewFraming(input: {
-  readonly toolName: string | null;
-  readonly title: string | null;
-  readonly description: string | null;
-}): InterviewDisplayFraming {
-  const title = meaningfulText(input.title);
-  const description = meaningfulText(input.description);
-  return {
-    title:
-      title === null || isGenericInterviewFraming(title, input.toolName)
-        ? null
-        : title,
-    description:
-      description === null ||
-      isGenericInterviewFraming(description, input.toolName)
-        ? null
-        : description,
-  };
 }
 
 function countBy<T>(
@@ -554,7 +484,6 @@ function findUnitId(
 
 function reviewSearchFields(input: {
   readonly blockId: string;
-  readonly framing: InterviewDisplayFraming;
   readonly summary: string;
   readonly pages: ReadonlyArray<InterviewReviewPage>;
   readonly fallbackAnswers: ReadonlyArray<InterviewReviewFallbackAnswer>;
@@ -594,19 +523,6 @@ function reviewSearchFields(input: {
     optionIndex: null,
     valueIndex: null,
   });
-  add(input.framing.title, {
-    fieldKind: "title",
-    questionIndex: null,
-    optionIndex: null,
-    valueIndex: null,
-  });
-  add(input.framing.description, {
-    fieldKind: "description",
-    questionIndex: null,
-    optionIndex: null,
-    valueIndex: null,
-  });
-
   input.pages.forEach((page, questionIndex) => {
     add(page.question.header, {
       fieldKind: "question-header",
@@ -812,7 +728,6 @@ export function deriveInterviewReviewModel(
     input.settlement,
     input.forkedWithoutAnswer,
   );
-  const framing = displayInterviewFraming(input);
   const summary = summaryFor({
     outcome,
     answered: currentAnsweredCount,
@@ -822,7 +737,6 @@ export function deriveInterviewReviewModel(
   });
   const reason = outcome === "answered" ? null : meaningfulText(input.error);
   return {
-    framing,
     outcome,
     summary,
     progress: progressFor({
@@ -839,7 +753,6 @@ export function deriveInterviewReviewModel(
     delivery,
     searchableFields: reviewSearchFields({
       blockId: input.blockId,
-      framing,
       summary,
       pages,
       fallbackAnswers: fallback,

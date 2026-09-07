@@ -14,7 +14,7 @@ import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-min
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 import type { TileKindToRefMap } from "@/stores/epics/canvas/tile-kind-types";
-import { BrowserLinkRoutingProvider } from "@/lib/browser-view/link-routing/browser-link-routing";
+import { LinkTargetProvider } from "@/lib/links/link-target-provider";
 import { BrowserSessionsHostBoundary } from "./browser-sessions-provider";
 import { BrowserSessionTile } from "./browser-session-tile";
 import { ChatTile } from "./chat-tile";
@@ -196,8 +196,9 @@ function tileRenderer<K extends TileKindId>(
 /**
  * Render any canvas tile. Wraps the kind-specific body in
  * `<TabHostProvider>` so every tile reads its bound host via
- * `useTabHostId()`, and in `<BrowserSessionsHostBoundary>` so everything
- * inside the tile - link routing, terminal OSC-8 links, the browser tile
+ * `useTabHostId()`, in `<LinkTargetProvider>` so an in-app link opens on this
+ * tile's own canvas tab, and in `<BrowserSessionsHostBoundary>` so everything
+ * inside the tile - link opening, terminal OSC-8 links, the browser tile
  * itself - reads the sessions stream of the TILE's host rather than the
  * canvas host's. Without it a tile on a remote host sees the canvas host's
  * stream, and every consumer that compares the two has to fall back; the
@@ -219,13 +220,7 @@ export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
         hostId={args.node.hostId}
         epicId={args.epicId}
       >
-        <BrowserLinkRoutingProvider
-          source={{
-            viewTabId: args.viewTabId,
-            paneId: args.tileId,
-            hostId: args.node.hostId,
-          }}
-        >
+        <LinkTargetProvider epicId={args.epicId} viewTabId={args.viewTabId}>
           <TileFindScope
             node={args.node}
             viewTabId={args.viewTabId}
@@ -237,7 +232,7 @@ export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
               {tileRenderer(args.node.type)(args)}
             </TileMinimapScope>
           </TileFindScope>
-        </BrowserLinkRoutingProvider>
+        </LinkTargetProvider>
       </BrowserSessionsHostBoundary>
     </TabHostProvider>
   );

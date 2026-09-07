@@ -110,6 +110,7 @@ function makeClient(
     clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     endpoint: () => mockLocalHostEntry,
+    hostId: mockLocalHostEntry.hostId,
     bearer: () => context.credentials,
     auth: null,
     clock: null,

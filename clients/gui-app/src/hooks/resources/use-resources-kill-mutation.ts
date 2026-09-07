@@ -10,7 +10,7 @@ import {
   useHostDirectory,
   type HostRpcRegistry,
 } from "@/lib/host";
-import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
+import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import {
   hostClientUnavailableError,
   withHostMutationLifecycleBoundary,
@@ -54,7 +54,7 @@ export function useResourcesKill(): UseMutationResult<
           const client: HostClient<HostRpcRegistry> | null =
             entry === null
               ? null
-              : buildTransientHostClient(defaultClient, entry);
+              : buildDialableHostClient(defaultClient, entry);
           if (client === null) {
             return Promise.reject(hostClientUnavailableError("resources.kill"));
           }

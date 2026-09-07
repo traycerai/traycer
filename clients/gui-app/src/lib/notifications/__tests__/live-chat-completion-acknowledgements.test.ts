@@ -7,6 +7,7 @@ import { createChatSessionStoreWithNotificationDependencies } from "@/stores/cha
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { createAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 class FakeBroadcastChannel {
   static readonly channels = new Map<string, Set<FakeBroadcastChannel>>();
@@ -178,6 +179,7 @@ function createChatRenderer(originId: string) {
   const callbackHistory: ChatStreamCallbacks[] = [];
   const handle = createChatSessionStoreWithNotificationDependencies(
     {
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-1",
       epicId: "epic-1",
       chatId: "chat-1",

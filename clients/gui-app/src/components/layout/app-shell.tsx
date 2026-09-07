@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import { DiffWorkerPoolProvider } from "@/components/diff-worker-pool-provider";
 import { BrowserOverlayCoordinatorBridge } from "@/components/epic-canvas/browser-overlay-coordinator-bridge";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
@@ -57,6 +57,32 @@ export function AppShell(props: AppShellProps) {
   // mobile-app product flag, so desktop attaches nothing and keeps its arrows.
   // Renders nothing until a swipe is actually in flight.
   const historySwipeTransition = useMobileHistorySwipes();
+  // Dev-only: flags a portal that painted outside the browser-overlay
+  // registry (browser-overlay-coexistence epic, ticket 02). Mounted here
+  // rather than inside `BrowserOverlayCoordinatorBridge` below - that file
+  // is owned by ticket 04 - and gated by a dynamic `import()` behind
+  // `import.meta.env.DEV`, the codebase's existing dev-only-module idiom
+  // (`src/dev/seed-canvas-fixture.ts`'s own gate in `traycer-app.tsx`), so a
+  // production build tree-shakes the whole module out, not just the call.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    let dispose: (() => void) | undefined;
+    let cancelled = false;
+    void import("@/lib/browser-view/tiles/unregistered-portal-tripwire")
+      .then((module) => {
+        if (cancelled) return;
+        const appRoot = document.getElementById("root");
+        if (appRoot === null) return;
+        dispose = module.installUnregisteredPortalTripwire(appRoot);
+      })
+      // A dev-only diagnostic that fails to load stays silent rather than
+      // surfacing as an unhandled rejection in the app it is watching.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
+  }, []);
 
   return (
     <PrimaryFocusCoordinatorProvider>
@@ -79,8 +105,18 @@ export function AppShell(props: AppShellProps) {
               <SessionConnectivityStrip />
               <main className="relative flex min-h-0 flex-1 flex-col">
                 {/* The app's edge-to-edge content viewport. Individual surfaces
-                  own their internal overflow, including the landing terminal. */}
-                <div className="relative flex min-h-0 flex-1 overflow-hidden">
+                  own their internal overflow, including the landing terminal.
+
+                  `overflow-clip`, NOT `overflow-hidden`: a hidden-overflow box
+                  is still a scroll container, so a `focus()` without
+                  `preventScroll` or a `scrollIntoView` on any descendant can
+                  scroll it programmatically - and nothing ever scrolls it
+                  back. Seen live when the window moved onto an external
+                  display: the transient relayout left this viewport scrolled
+                  by one toolbar row, so the epic status row and sidebar rail
+                  sat under the app header until a tab switch remounted the
+                  surface. A clipped box has no scroll offset to drift. */}
+                <div className="relative flex min-h-0 flex-1 overflow-clip">
                   <TopLevelSurfaceActivationProvider>
                     <TopLevelTabHost />
                   </TopLevelSurfaceActivationProvider>

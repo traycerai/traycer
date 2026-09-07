@@ -23,12 +23,17 @@
  * commands a chat owns, and the subset of them currently held, both ride that
  * chat's `chat.subscribe` stream.
  */
-import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
+import {
+  managedCommandConfigureAgentShellRequestSchema,
+  managedCommandConfigureAgentShellResponseSchema,
   managedCommandConfigureRequestSchema,
-  managedCommandConfigureResponseSchema,
   managedCommandControlRequestSchema,
   managedCommandControlResponseSchema,
+  managedCommandControlResponseSchemaV10,
   managedCommandCreateRequestSchema,
   managedCommandCreateResponseSchema,
   managedCommandDeleteRequestSchema,
@@ -42,22 +47,82 @@ import {
   managedCommandViewRequestSchema,
   managedCommandViewResponseSchema,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
-import { managedCommandSubscribeOutputV10 } from "@traycer/protocol/host/managed-command/subscribe";
+import {
+  managedCommandSubscribeOutputV10,
+  managedCommandSubscribeOutputV11,
+} from "@traycer/protocol/host/managed-command/subscribe";
 
-/** Idempotent: starting an already-running command is a no-op, not an error. */
+/**
+ * Idempotent: starting an already-running command is a no-op, not an error.
+ *
+ * `@1.0` shipped (cli-v1.2.0) returning the command WITHOUT
+ * `relaunchOnHostRestart`, so it stays pinned to that pre-image: the host's
+ * within-major projection (Zod's default strip against this schema) drops the
+ * flag for a `1.0` peer. `@1.1` below is the line that carries it.
+ */
 export const managedCommandStartV10 = defineRpcContract({
   method: "managedCommand.start",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: managedCommandControlRequestSchema,
+  responseSchema: managedCommandControlResponseSchemaV10,
+});
+
+/**
+ * `@1.1`: the same call, returning the command with `relaunchOnHostRestart`.
+ * A minor rather than an in-place change to `1.0` because the released gate
+ * treats any growth of a host→client shape on a shipped line as breaking -
+ * a defaulted field included - and a `1.0` peer's frozen schema must keep
+ * describing exactly the bytes it gets.
+ */
+export const managedCommandStartV11 = defineRpcContract({
+  method: "managedCommand.start",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: managedCommandControlRequestSchema,
   responseSchema: managedCommandControlResponseSchema,
 });
 
-/** The supervisor's graceful stop: TERM to the process group, grace, then KILL. */
+// The request did not change. The response grew a defaulted field, so a `1.0`
+// response upgrades by parsing through the live schema, which fills the
+// default (`true`: a host that only serves `1.0` predates the choice and
+// respawns every survivor - see `managedCommandSchema`).
+export const managedCommandStartUpgradeV10ToV11 = defineUpgradePath<
+  typeof managedCommandStartV10,
+  typeof managedCommandStartV11
+>({
+  from: managedCommandStartV10.schemaVersion,
+  to: managedCommandStartV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) =>
+    managedCommandControlResponseSchema.parse(response),
+});
+
+/**
+ * The supervisor's graceful stop: TERM to the process group, grace, then KILL.
+ * Same `1.0` pre-image / `1.1` live split as `managedCommand.start`.
+ */
 export const managedCommandStopV10 = defineRpcContract({
   method: "managedCommand.stop",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: managedCommandControlRequestSchema,
+  responseSchema: managedCommandControlResponseSchemaV10,
+});
+
+export const managedCommandStopV11 = defineRpcContract({
+  method: "managedCommand.stop",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: managedCommandControlRequestSchema,
   responseSchema: managedCommandControlResponseSchema,
+});
+
+export const managedCommandStopUpgradeV10ToV11 = defineUpgradePath<
+  typeof managedCommandStopV10,
+  typeof managedCommandStopV11
+>({
+  from: managedCommandStopV10.schemaVersion,
+  to: managedCommandStopV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) =>
+    managedCommandControlResponseSchema.parse(response),
 });
 
 /**
@@ -93,11 +158,21 @@ export const managedCommandViewV10 = defineRpcContract({
   responseSchema: managedCommandViewResponseSchema,
 });
 
-export const managedCommandConfigureV10 = defineRpcContract({
-  method: "managedCommand.configure",
+/**
+ * The agent's configure, and deliberately NOT `managedCommand.configure`.
+ *
+ * That name belongs to the human switch below, which predates this line on the
+ * released side and is what the GUI calls. This one is the agent editing
+ * settings it authored - a different caller, a different field set, and the
+ * wider `managedCommandAgentViewSchema` in response - so it is a separate
+ * method rather than a widening of that one. Sharing the name would have
+ * forced one response shape on both callers and cost the GUI its pre-image.
+ */
+export const managedCommandConfigureAgentShellV10 = defineRpcContract({
+  method: "managedCommand.configureAgentShell",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: managedCommandConfigureRequestSchema,
-  responseSchema: managedCommandConfigureResponseSchema,
+  requestSchema: managedCommandConfigureAgentShellRequestSchema,
+  responseSchema: managedCommandConfigureAgentShellResponseSchema,
 });
 
 export const managedCommandRestartV10 = defineRpcContract({
@@ -105,6 +180,23 @@ export const managedCommandRestartV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: managedCommandRestartRequestSchema,
   responseSchema: managedCommandRestartResponseSchema,
+});
+
+/**
+ * Sets whether the command relaunches after a host restart. Live: the running
+ * process is never touched. The "no update" rule above still stands - this
+ * edits lifecycle policy, not what the command is - and it exists because the
+ * person watching a host relaunch a shell they never asked for needs a switch
+ * the agent's transcript cannot give them.
+ *
+ * Brand new alongside `start@1.1` / `stop@1.1`, so its `1.0` already returns
+ * the live command shape - there is no released peer to pin a pre-image for.
+ */
+export const managedCommandConfigureV10 = defineRpcContract({
+  method: "managedCommand.configure",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: managedCommandConfigureRequestSchema,
+  responseSchema: managedCommandControlResponseSchema,
 });
 
 /**
@@ -131,4 +223,4 @@ export const managedCommandDeliverHeldV10 = defineRpcContract({
   responseSchema: managedCommandDeliverHeldResponseSchema,
 });
 
-export { managedCommandSubscribeOutputV10 };
+export { managedCommandSubscribeOutputV10, managedCommandSubscribeOutputV11 };

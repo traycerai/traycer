@@ -38,6 +38,40 @@ export interface HostRequestAuthority {
 }
 
 /**
+ * Per-request options shared by every unary send: the idempotency key that
+ * lets a retried request be recognized as the same attempt, and the frozen
+ * authority it may dispatch under. Grouped so `request` and
+ * `requestWithResponseTimeout` take the same trailing shape rather than two
+ * positional tails that drift apart as the seam grows.
+ */
+export interface HostRequestOptions {
+  readonly idempotencyKey: string | null;
+  readonly authority: HostRequestAuthority;
+  /**
+   * This dispatch is a REPLAY of an attempt that may already have committed,
+   * so it must not go out unkeyed.
+   *
+   * `false` on a caller's first attempt, and set by
+   * `createRetryingMessenger` for every attempt after a failure whose
+   * retryability was earned by a negotiated key
+   * ({@link RetryableTransportError.replaySafetyFromKey}).
+   *
+   * The two are not the same question as `idempotencyKey !== null`. A key is
+   * what the CALLER asked for; this is whether dropping it is still allowed.
+   * Both transports strip a key the handshake cannot honour
+   * (`ws-rpc-client`'s `wireIdempotencyKey`, `remote-session`'s), which is
+   * correct on a first attempt against a host that predates the capability -
+   * nothing has been dispatched, so an unkeyed send is a first send. It is not
+   * correct on a replay: the first attempt's retryability was granted BECAUSE
+   * that connection negotiated a key, and a second connection that cannot
+   * honour it - a reconnect onto a host replaced by an older incarnation -
+   * would execute the mutation a second time with no dedupe. On that path both
+   * transports must refuse and answer ambiguously instead of dispatching.
+   */
+  readonly replayMustBeKeyed: boolean;
+}
+
+/**
  * App-facing host messenger abstraction.
  *
  * `IHostMessenger` sits above the committed versioned RPC envelope. Callers
@@ -58,7 +92,7 @@ export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
   request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
-    authority: HostRequestAuthority,
+    options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>>;
 
   /**
@@ -75,7 +109,7 @@ export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
-    authority: HostRequestAuthority,
+    options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>>;
 }
 

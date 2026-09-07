@@ -16,6 +16,7 @@ export default defineConfig({
       relayBaseUrl: "ws://127.0.0.1:1",
       hostLabel: "Traycer Mobile (vitest)",
       returnScheme: "traycer-dev",
+      sentryDsn: "",
       devHost: null,
     }),
   },

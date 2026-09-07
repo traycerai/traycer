@@ -9,6 +9,7 @@ import {
   type RemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/index";
+import { planRestrictedReprobeAtFromClosedReason } from "@traycer-clients/shared/host-transport/remote/config";
 import type { HostStatusDTO } from "@traycer/protocol/host/host-status";
 import {
   hostRpcRegistry,
@@ -38,18 +39,14 @@ import {
   remoteAwareOwnerIdentity,
   remoteAwareOwnerIdentityKey,
 } from "@/lib/host/transport-key";
+import {
+  DEFAULT_INITIAL_BACKOFF_MS,
+  DEFAULT_MAX_BACKOFF_MS,
+  DEFAULT_OPEN_ACK_TIMEOUT_MS,
+  DEFAULT_PING_INTERVAL_MS,
+  DEFAULT_PONG_TIMEOUT_MS,
+} from "@traycer-clients/shared/host-transport/transport-config";
 
-/**
- * Per-session stream dial / handshake / heartbeat timings. Mirror the values
- * the app-wide `HostStreamProvider` builds its `WsStreamClient` with (those
- * constants are module-private there) so a transient client behaves
- * identically on the wire.
- */
-const OPEN_ACK_TIMEOUT_MS = 10_000;
-const PING_INTERVAL_MS = 25_000;
-const PONG_TIMEOUT_MS = 60_000;
-const INITIAL_BACKOFF_MS = 1_000;
-const MAX_BACKOFF_MS = 30_000;
 const TRANSPORT_KEY_SEPARATOR = "\u0000";
 
 const browserStreamWebSocketFactory = createWhatwgStreamWebSocketFactory();
@@ -279,6 +276,12 @@ export function buildHostStreamClient(params: {
 
   return new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
+    // Named, so this client can seed its stream-method support from what an
+    // earlier handshake with the SAME host already computed instead of probing
+    // for it again. The Epic's client is minted per session, so before this the
+    // answer was re-derived - and paid for with a serial lane probe - on every
+    // Epic open. See `stream-method-support-registry.ts`.
+    hostId: params.target.hostId,
     endpoint: params.endpoint,
     bearer: params.bearer,
     auth: params.auth,
@@ -310,11 +313,11 @@ export function buildHostStreamClient(params: {
     evidence: transportEvidenceRelay,
     webSocketFactory: browserStreamWebSocketFactory,
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
-    openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
-    pingIntervalMs: PING_INTERVAL_MS,
-    pongTimeoutMs: PONG_TIMEOUT_MS,
-    initialBackoffMs: INITIAL_BACKOFF_MS,
-    maxBackoffMs: MAX_BACKOFF_MS,
+    openAckTimeoutMs: DEFAULT_OPEN_ACK_TIMEOUT_MS,
+    pingIntervalMs: DEFAULT_PING_INTERVAL_MS,
+    pongTimeoutMs: DEFAULT_PONG_TIMEOUT_MS,
+    initialBackoffMs: DEFAULT_INITIAL_BACKOFF_MS,
+    maxBackoffMs: DEFAULT_MAX_BACKOFF_MS,
     clientIdentity: getGuiClientIdentity(),
   });
 }
@@ -576,6 +579,19 @@ export function useHostStreamClientBindingFor(
     };
     const rebuild = (): void => {
       if (teardownInProgressRef.current) return;
+      const planRestrictedReprobeAt = planRestrictedReprobeAtFromClosedReason(
+        client.getClosedReason(),
+      );
+      if (planRestrictedReprobeAt !== null) {
+        backoffTimer = window.setTimeout(
+          () => {
+            backoffTimer = null;
+            setRebuildNonce((nonce) => nonce + 1);
+          },
+          Math.max(0, planRestrictedReprobeAt - Date.now()),
+        );
+        return;
+      }
       const delayMs = rebuildBackoff.nextRebuildDelayMs(Date.now());
       appLogger.warn(
         "[stream] transient host stream client closed underneath its binding - rebuilding",

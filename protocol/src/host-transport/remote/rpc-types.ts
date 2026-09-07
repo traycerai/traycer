@@ -159,15 +159,34 @@ export class HostTransportFailureError extends HostRpcError {
 }
 
 export class RetryableTransportError extends HostTransportFailureError {
+  /**
+   * This retryability was earned by a NEGOTIATED KEY rather than by proof that
+   * nothing was dispatched.
+   *
+   * The two grounds are not interchangeable and the difference decides what a
+   * retry is allowed to do. A pre-dispatch failure is safe to replay however
+   * the next connection is configured, because the host never saw the call. A
+   * post-send failure is safe only for as long as the host is deduplicating
+   * the key - so a replay of one must itself be keyed, which is what
+   * `HostRequestOptions.replayMustBeKeyed` carries into the next attempt.
+   *
+   * Defaulted nowhere: every construction states its ground, because a
+   * `false` assumed by omission would silently license exactly the unkeyed
+   * replay this field exists to prevent.
+   */
+  readonly replaySafetyFromKey: boolean;
+
   constructor(details: {
     code: RpcErrorCode;
     message: string;
     requestId: string;
     method: string;
     fatalDetails: FatalErrorDetails | null;
+    replaySafetyFromKey: boolean;
   }) {
     super(details);
     this.name = "RetryableTransportError";
+    this.replaySafetyFromKey = details.replaySafetyFromKey;
   }
 }
 

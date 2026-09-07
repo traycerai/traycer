@@ -129,7 +129,7 @@ const mocks = vi.hoisted(() => {
         };
       },
     },
-    buildTransientHostClient: vi.fn<
+    buildDialableHostClient: vi.fn<
       (
         client: unknown,
         entry: { readonly hostId: string },
@@ -221,7 +221,7 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 vi.mock("@/hooks/host/use-host-client-for", () => ({
-  buildTransientHostClient: mocks.buildTransientHostClient,
+  buildDialableHostClient: mocks.buildDialableHostClient,
 }));
 // jsdom reports a desktop width, so this only makes the default explicit -
 // the phone case flips it per test.
@@ -611,8 +611,8 @@ describe("<LandingTerminalPanel />", () => {
     // Reset (not just clear): a test may override the return with a fail-closed
     // `null`, and mockClear would leak that override into later tests. Restore
     // the default host-pinned client here.
-    mocks.buildTransientHostClient.mockReset();
-    mocks.buildTransientHostClient.mockImplementation(
+    mocks.buildDialableHostClient.mockReset();
+    mocks.buildDialableHostClient.mockImplementation(
       (_client: unknown, entry: { readonly hostId: string }) => ({
         getActiveHostId: () => entry.hostId,
         onChange: () => () => undefined,
@@ -2576,7 +2576,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = mocks.probeData;
     // Directory churn / missing ws url: the transient client cannot be pinned.
-    mocks.buildTransientHostClient.mockReturnValue(null);
+    mocks.buildDialableHostClient.mockReturnValue(null);
     render(panelUiForDraft("draft-a"));
     const router = fakeKeybindingRouter();
 
@@ -2714,7 +2714,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = mocks.probeData;
     // The transient client cannot be pinned to the host.
-    mocks.buildTransientHostClient.mockReturnValue(null);
+    mocks.buildDialableHostClient.mockReturnValue(null);
     render(panelUiForDraft("draft-a"));
     const router = fakeKeybindingRouter();
 
@@ -2985,7 +2985,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
     let pinnedHostId = "host-a";
-    mocks.buildTransientHostClient.mockImplementation(() => ({
+    mocks.buildDialableHostClient.mockImplementation(() => ({
       getActiveHostId: () => pinnedHostId,
       onChange: () => () => undefined,
     }));

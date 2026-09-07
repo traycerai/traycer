@@ -33,6 +33,8 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
     hostId: "host-1",
     requestContextUserId: "user-1",
     isReady: queryMocks.isReady,
+    hasRpcEndpoint: queryMocks.isReady,
+    canExecute: queryMocks.isReady,
   }),
 }));
 

@@ -33,7 +33,9 @@
  *
  * Client frames:
  *
- * - `ping` - heartbeat. No application client frames.
+ * - `ping`      - heartbeat.
+ * - `setDemand` - `@1.5+` visibility hint: background while mounted,
+ *                 interactive only while the monitor is actually visible.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -262,6 +264,37 @@ export type ResourcesSubscribeClientFrame = z.infer<
   typeof resourcesSubscribeClientFrameSchema
 >;
 
+export const resourcesSubscribeDemandSchema = z.enum([
+  "background",
+  "interactive",
+]);
+export type ResourcesSubscribeDemand = z.infer<
+  typeof resourcesSubscribeDemandSchema
+>;
+
+/**
+ * `@1.5` adds client-controlled sampling demand. The server always starts a
+ * subscription at background cadence, so an older/newer peer combination is
+ * safe: absence of this frame means lower refresh frequency, never extra work.
+ */
+export const resourcesSubscribeClientFrameSchemaV15 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("ping"),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("setDemand"),
+      demand: resourcesSubscribeDemandSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+  ],
+);
+export type ResourcesSubscribeClientFrameV15 = z.infer<
+  typeof resourcesSubscribeClientFrameSchemaV15
+>;
+
 export const resourcesSubscribeV10 = defineStreamRpcContract({
   method: "resources.subscribe",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -418,6 +451,163 @@ export const resourcesSubscribeV14 = defineStreamRpcContract({
   openRequestSchema: resourcesSubscribeOpenRequestV11Schema,
   serverFrameSchema: resourcesSubscribeServerFrameSchemaV14,
   clientFrameSchema: resourcesSubscribeClientFrameSchema,
+});
+
+/**
+ * `@1.5` adds truthful nullable memory readings and a bounded semantic
+ * descriptor for Chromium processes. A memory null means unavailable or
+ * incomplete; descriptor null means the process has no safely joined semantic
+ * label. Older minors keep their numeric RSS field and receive zero only at
+ * the host's explicit legacy-projection boundary.
+ */
+const nullableMemoryDetailFields = {
+  pssBytes: z.number().int().nonnegative().nullable(),
+  privateBytes: z.number().int().nonnegative().nullable(),
+} as const;
+
+const resourceReadingFieldsV15 = {
+  // Deliberately the frozen minors' `z.number()`: tightening a field a client
+  // has to parse turns a jittery host reading into an unparseable frame, and
+  // the client has no cheaper recovery than dropping the projection.
+  cpuPercent: z.number(),
+  rssBytes: z.number().int().nonnegative().nullable(),
+  ...nullableMemoryDetailFields,
+} as const;
+
+export const chromiumProcessRuntimeSchema = z.enum(["sessions", "cell-runner"]);
+export type ChromiumProcessRuntimeWire = z.infer<
+  typeof chromiumProcessRuntimeSchema
+>;
+
+export const chromiumProcessRoleSchema = z.enum([
+  "browser",
+  "renderer",
+  "gpu",
+  "network",
+  "storage",
+  "audio",
+  "utility",
+  "subprocess",
+]);
+export type ChromiumProcessRoleWire = z.infer<typeof chromiumProcessRoleSchema>;
+
+export const chromiumProcessDescriptorSchema = z.object({
+  family: z.literal("chromium"),
+  runtime: chromiumProcessRuntimeSchema,
+  role: chromiumProcessRoleSchema,
+});
+export type ChromiumProcessDescriptorWire = z.infer<
+  typeof chromiumProcessDescriptorSchema
+>;
+
+export const resourceProcessSnapshotSchemaV15 = z.object({
+  ...resourceProcessSnapshotSchema.shape,
+  ...resourceReadingFieldsV15,
+  descriptor: chromiumProcessDescriptorSchema.nullable(),
+});
+export type ResourceProcessSnapshotWireV15 = z.infer<
+  typeof resourceProcessSnapshotSchemaV15
+>;
+
+export const ownerResourceSnapshotSchemaV15 = z.object({
+  ...ownerResourceSnapshotSchemaV14.shape,
+  ...resourceReadingFieldsV15,
+  processes: z.array(resourceProcessSnapshotSchemaV15),
+});
+export type OwnerResourceSnapshotWireV15 = z.infer<
+  typeof ownerResourceSnapshotSchemaV15
+>;
+
+export const epicResourceSnapshotSchemaV15 = z.object({
+  ...epicResourceSnapshotSchema.shape,
+  ...resourceReadingFieldsV15,
+});
+export type EpicResourceSnapshotWireV15 = z.infer<
+  typeof epicResourceSnapshotSchemaV15
+>;
+
+export const appResourceSnapshotSchemaV15 = z.object({
+  ...appResourceSnapshotSchema.shape,
+  ...resourceReadingFieldsV15,
+  process: resourceProcessSnapshotSchemaV15.nullable(),
+});
+export type AppResourceSnapshotWireV15 = z.infer<
+  typeof appResourceSnapshotSchemaV15
+>;
+
+export const hostTreeResourceSnapshotSchemaV15 = z.object({
+  ...hostTreeResourceSnapshotSchema.shape,
+  ...resourceReadingFieldsV15,
+});
+export type HostTreeResourceSnapshotWireV15 = z.infer<
+  typeof hostTreeResourceSnapshotSchemaV15
+>;
+
+export const otherResourceSnapshotSchemaV15 = z.object({
+  ...otherResourceSnapshotSchema.shape,
+  ...resourceReadingFieldsV15,
+  processes: z.array(resourceProcessSnapshotSchemaV15),
+});
+export type OtherResourceSnapshotWireV15 = z.infer<
+  typeof otherResourceSnapshotSchemaV15
+>;
+
+/**
+ * Aggregate-only usage whose process identity cannot safely appear in this
+ * subscription. Global views use it for unauthorized owner trees; an epic
+ * view also uses it for otherwise-authorized owners outside that epic. It has
+ * deliberately no pid, root, command, descriptor, owner, epic, or account
+ * fields, so host-wide totals can reconcile without leaking the hidden tree.
+ */
+export const restrictedResourceSnapshotSchemaV15 = z
+  .object({
+    sampledAt: z.number(),
+    processCount: z.number().int().nonnegative(),
+    ...resourceReadingFieldsV15,
+  })
+  .strict();
+export type RestrictedResourceSnapshotWireV15 = z.infer<
+  typeof restrictedResourceSnapshotSchemaV15
+>;
+
+const resourcesProjectionFieldsV15 = {
+  ...resourcesProjectionFieldsV14,
+  app: appResourceSnapshotSchemaV15.nullable(),
+  owners: z.array(ownerResourceSnapshotSchemaV15),
+  epic: epicResourceSnapshotSchemaV15.nullable(),
+  epics: z.array(epicResourceSnapshotSchemaV15).optional(),
+  hostTree: hostTreeResourceSnapshotSchemaV15.nullable(),
+  other: otherResourceSnapshotSchemaV15.nullable(),
+  restricted: restrictedResourceSnapshotSchemaV15.nullable(),
+} as const;
+
+export const resourcesSubscribeServerFrameSchemaV15 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...resourcesProjectionFieldsV15,
+    }),
+    z.object({
+      kind: z.literal("update"),
+      ...resourcesProjectionFieldsV15,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ],
+);
+export type ResourcesSubscribeServerFrameV15 = z.infer<
+  typeof resourcesSubscribeServerFrameSchemaV15
+>;
+
+export const resourcesSubscribeV15 = defineStreamRpcContract({
+  method: "resources.subscribe",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  openRequestSchema: resourcesSubscribeOpenRequestV11Schema,
+  serverFrameSchema: resourcesSubscribeServerFrameSchemaV15,
+  clientFrameSchema: resourcesSubscribeClientFrameSchemaV15,
 });
 
 // ── `resources.kill@1.0` — unary ────────────────────────────────────────────

@@ -45,16 +45,21 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
-// `EpicSessionProvider` opens its own durable transport via this factory, but
-// the test installs an `__setEpicStreamClientFactoryForTests` override that
-// short-circuits before `openTransport` runs - so a stable stub opener that is
-// never invoked lets the provider mount without the full host runtime.
-const openTransportStub = vi.hoisted(() => () => {
-  throw new Error("openTransport must not be called in this test");
+// `EpicSessionProvider` opens its own durable transport via this factory, and
+// UNCONDITIONALLY now. The stub here used to THROW, which was safe only while
+// the `__setEpicStreamClientFactoryForTests` override made the provider
+// short-circuit before `openTransport` ran; with that branch deleted, every
+// test in this file reached the throw. The fake supplies "no socket in tests"
+// instead. This suite needs no live replica, so it keeps the jsdom setup
+// file's coreless worker and does not touch the worker seam.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
 });
-vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => openTransportStub,
-}));
 
 // `null` support is "still negotiating", which keeps the notification feed -
 // and therefore the tab's indicator derivation - on the local host path these
@@ -200,14 +205,32 @@ function markChatWorking(): void {
   ]);
 }
 
-function setChatArchived(archivedAt: number | null): void {
+/**
+ * Edit the root replica from outside it.
+ *
+ * A registry handle is a PRODUCTION handle and has no `Y.Doc` - the replica is
+ * on the worker thread. The root-state port is the way in: decode the current
+ * state, mutate the decoded copy, and send back only the DIFF as a local edit.
+ *
+ * The diff matters. Applying a whole freshly-built document instead would put
+ * this test's own client id on ops for types the replica already has, and Yjs
+ * would merge two independently-created `chats` maps rather than editing the
+ * one that exists. Encoding against the state vector taken before the mutation
+ * keeps the edit on the replica's own lineage.
+ */
+async function setChatArchived(archivedAt: number | null): Promise<void> {
   const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
   if (handle === null) throw new Error("expected open epic handle");
-  const chats: unknown = handle.doc.getMap("epic").get("chats");
+  const scratch = new Y.Doc();
+  Y.applyUpdate(scratch, await handle.encodeRootState());
+  const before = Y.encodeStateVector(scratch);
+  const chats: unknown = scratch.getMap("epic").get("chats");
   if (!(chats instanceof Y.Map)) throw new Error("expected chats map");
   const chat: unknown = chats.get(CHAT_ID);
   if (!(chat instanceof Y.Map)) throw new Error("expected chat map");
   chat.set("archivedAt", archivedAt);
+  await handle.applyRootUpdate(Y.encodeStateAsUpdate(scratch, before), true);
+  scratch.destroy();
 }
 
 describe("TabStrip title", () => {
@@ -244,8 +267,8 @@ describe("TabStrip title", () => {
 
     const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
     if (handle === null) throw new Error("expected open epic handle");
-    act(() => {
-      handle.store.getState().renameArtifact(CHAT_ID, "Generated title");
+    await act(async () => {
+      await handle.store.getState().renameArtifact(CHAT_ID, "Generated title");
     });
 
     await waitFor(() => {
@@ -275,8 +298,8 @@ describe("TabStrip title", () => {
     const title = screen.getByTestId(`tab-title-${TAB.instanceId}`);
     expect(within(title).queryByText("Archived")).toBeNull();
 
-    act(() => {
-      setChatArchived(123);
+    await act(async () => {
+      await setChatArchived(123);
     });
 
     await waitFor(() => {
@@ -289,8 +312,8 @@ describe("TabStrip title", () => {
     );
     expect(screen.getByTestId(`tab-item-${TAB.instanceId}`)).toBeTruthy();
 
-    act(() => {
-      setChatArchived(null);
+    await act(async () => {
+      await setChatArchived(null);
     });
 
     await waitFor(() => {
@@ -475,8 +498,14 @@ describe("TabStrip title", () => {
 
     const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
     if (handle === null) throw new Error("expected open epic handle");
-    act(() => {
-      const chats = handle.doc.getMap<unknown>("epic").get("chats");
+    // Through the root-state port, for the reason `setChatArchived` above
+    // gives: a registry handle has no `Y.Doc`, and the diff is what keeps this
+    // edit on the replica's own lineage.
+    await act(async () => {
+      const scratch = new Y.Doc();
+      Y.applyUpdate(scratch, await handle.encodeRootState());
+      const before = Y.encodeStateVector(scratch);
+      const chats = scratch.getMap<unknown>("epic").get("chats");
       if (!(chats instanceof Y.Map)) {
         throw new Error("expected chats map");
       }
@@ -485,6 +514,11 @@ describe("TabStrip title", () => {
         throw new Error("expected chat map");
       }
       chat.set("updatedAt", Date.now() + 1_000);
+      await handle.applyRootUpdate(
+        Y.encodeStateAsUpdate(scratch, before),
+        true,
+      );
+      scratch.destroy();
     });
 
     await waitFor(() => {

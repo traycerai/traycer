@@ -590,7 +590,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
         tabId,
         parentId: target.sourceAgent.parentId,
         title: trimmedTitle,
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: target.sourceAgent.harnessId,
         model:
           toolbar.selection.modelSlug.length > 0

@@ -113,18 +113,19 @@ const chatRecordsRef = vi.hoisted(() => ({
 }));
 
 /**
- * Structurally typed on the two fields the assertions read, rather than on
- * `EpicCanvasTileRef` - the ref union's other members would force a cast at the
- * call-site read, and the point of the test is which id and kind got opened.
+ * `openTile` takes a single intent object (`{ node, target, ... }`);
+ * structurally typed on the two `node` fields the assertions read, rather
+ * than on `EpicCanvasTileRef` - the ref union's other members would force a
+ * cast at the call-site read, and the point of the test is which id and kind
+ * got opened, on which tab.
  */
 const tileNavigationMock = vi.hoisted(() => ({
-  openTileInTab: vi.fn(
-    (_tabId: string, _node: { readonly id: string; readonly type: string }) =>
-      null,
+  openTile: vi.fn(
+    (_intent: {
+      readonly node: { readonly id: string; readonly type: string };
+      readonly target: { readonly tabId?: string };
+    }) => null,
   ),
-  openTilePreviewInTab: vi.fn(() => null),
-  openTileInEpic: vi.fn(() => null),
-  openTilePreviewInEpic: vi.fn(() => null),
 }));
 
 import { PrDetailBody } from "@/components/epic-canvas/pr/pr-detail-body";
@@ -375,7 +376,7 @@ describe("PrDetailBody", () => {
     queryClient.clear();
     wsStreamClientRef.value = null;
     chatRecordsRef.value = [];
-    tileNavigationMock.openTileInTab.mockClear();
+    tileNavigationMock.openTile.mockClear();
   });
 
   it("sends only one detail refresh frame while a PR list is visible", async () => {
@@ -941,16 +942,16 @@ describe("PrDetailBody", () => {
     expect(fix.hasAttribute("disabled")).toBe(false);
 
     fireEvent.click(fix);
-    expect(tileNavigationMock.openTileInTab).toHaveBeenCalledTimes(1);
-    const [tabId, node] = tileNavigationMock.openTileInTab.mock.calls[0];
-    expect(tabId).toBe("tab-1");
-    expect(node.id).toBe("chat-7");
-    expect(node.type).toBe("chat");
+    expect(tileNavigationMock.openTile).toHaveBeenCalledTimes(1);
+    const [intent] = tileNavigationMock.openTile.mock.calls[0];
+    expect(intent.target).toEqual({ tabId: "tab-1" });
+    expect(intent.node.id).toBe("chat-7");
+    expect(intent.node.type).toBe("chat");
 
     // The passive quote glyphs must NOT navigate - they are for stacking
     // context before you go, and yanking the tab away mid-collection is its
     // own bug.
     fireEvent.click(screen.getByTestId("pr-detail-description-quote"));
-    expect(tileNavigationMock.openTileInTab).toHaveBeenCalledTimes(1);
+    expect(tileNavigationMock.openTile).toHaveBeenCalledTimes(1);
   });
 });

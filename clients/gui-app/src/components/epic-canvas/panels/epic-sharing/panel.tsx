@@ -67,6 +67,7 @@ function SharingPanelContent(props: {
       <MyAgentsSharingSection epicId={props.epicId} />
 
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={revokeDialogProps.open}
         onOpenChange={revokeDialogProps.onOpenChange}
         title={revokeDialogProps.title}

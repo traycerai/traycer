@@ -5,6 +5,7 @@ import { ArtifactCardSegment } from "@/components/chat/segments/artifact-card-se
 import { readEpicCanvasDragSourceData } from "@/components/epic-canvas/dnd/dnd";
 import { commitResolvedCanvasDrop } from "@/components/epic-canvas/dnd/root-dnd-commits";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
@@ -55,9 +56,12 @@ const canvas = vi.hoisted(() => ({
       name: "Epic 1",
     },
   },
+  // No canvas for "tab-1": the resolver then sees an empty canvas and plans a
+  // whole-tab open, which is the `*FromSource` seam recorded below.
+  canvasByTabId: {} as Record<string, unknown>,
   resolveTargetTabForEpic: vi.fn(() => "tab-1"),
   openTileInTab: vi.fn<(tabId: string, node: EpicArtifactRef) => void>(),
-  prepareOpenTileInTabFocusTarget: vi.fn(
+  prepareOpenTileInTabFocusTargetFromSource: vi.fn(
     (tabId: string, node: EpicArtifactRef) => {
       canvas.openTileInTab(tabId, node);
       return null;
@@ -77,6 +81,10 @@ const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
 
 const dnd = vi.hoisted(() => ({
   draggables: [] as CapturedDraggable[],
+}));
+
+const tileNavigation = vi.hoisted(() => ({
+  openTile: vi.fn<(intent: TileOpenIntent) => null>(() => null),
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -108,8 +116,16 @@ vi.mock("@/stores/epics/canvas/store", () => {
     // `useEpicViewTabId` context instead). Distinct from the owner so the drag
     // test discriminates owner vs MRU.
     resolveTabIdForEpic: canvas.resolveTabIdForEpic,
+    trackOpenedCanvasTile: () => undefined,
   };
 });
+
+// The card's own open goes through the one `openTile` seam, so the intent is
+// what this suite asserts; the drop path below still runs the real executor
+// against the store mock above.
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({ openTile: tileNavigation.openTile }),
+}));
 
 // Capture the card's `useDraggable` input while keeping every other real
 // `@dnd-kit/core` export (the commit path's transitive deps stay intact).
@@ -146,6 +162,7 @@ describe("<ArtifactCardSegment />", () => {
     canvas.resolveTargetTabForEpic.mockClear();
     canvas.openTileInTab.mockClear();
     canvas.resolveTabIdForEpic.mockClear();
+    tileNavigation.openTile.mockClear();
   });
   afterEach(() => {
     cleanup();
@@ -500,20 +517,30 @@ describe("<ArtifactCardSegment />", () => {
 
     fireEvent.click(screen.getByText("My Story"));
 
-    expect(canvas.resolveTargetTabForEpic).toHaveBeenCalledWith(
-      "epic-1",
-      undefined,
-    );
-    expect(canvas.openTileInTab).toHaveBeenCalledTimes(1);
-    const [tabId, node] = canvas.openTileInTab.mock.calls[0];
-    expect(tabId).toBe("tab-1");
-    expect(node).toMatchObject({
+    expect(tileNavigation.openTile).toHaveBeenCalledTimes(1);
+    const [intent] = tileNavigation.openTile.mock.calls[0];
+    // The card names the EPIC, never a tab: which canvas that lands on is the
+    // resolver's call, not the card's.
+    expect(intent.target).toEqual({ epicId: "epic-1" });
+    // A card open is a deliberate button press, so it is permanent-by-gesture
+    // and de-duped onto an already-open tile.
+    expect(intent.gesture).toBe("explicit");
+    expect(intent.dedupe).toBe(true);
+    expect(intent.placement).toBeNull();
+    expect(intent.source).toBe("direct_ui");
+    // A real click is in hand, so the modifier triple travels with it.
+    expect(intent.modifiers).toEqual({
+      shift: false,
+      alt: false,
+      middle: false,
+    });
+    expect(intent.node).toMatchObject({
       id: "a1",
       type: "story",
       name: "My Story",
       hostId: "host-1",
     });
-    expect(typeof node.instanceId).toBe("string");
+    expect(typeof intent.node.instanceId).toBe("string");
   });
 
   it("stays non-crashing and non-openable for an entirely unknown id", () => {

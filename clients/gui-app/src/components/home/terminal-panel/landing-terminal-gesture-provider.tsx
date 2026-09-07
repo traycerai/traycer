@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
 import { useHostDirectory } from "@/lib/host";
-import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
+import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { useHomeWorkspaceSource } from "@/components/home/host-workspace-selector/use-home-workspace-source";
@@ -134,7 +134,7 @@ export function LandingTerminalGestureProvider(props: {
     const pinnedClient =
       entry === null || defaultClient === null
         ? null
-        : buildTransientHostClient(defaultClient, entry);
+        : buildDialableHostClient(defaultClient, entry);
     // `workspace` above tracks a pinned gesture's captured host, and the one
     // path that captures while another gesture pins (`togglePanel` on a start
     // page whose own panel is closed) can be capturing a DIFFERENT host. Those

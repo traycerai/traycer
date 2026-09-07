@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostFsLayout } from "../../host/host-paths";
@@ -7,6 +7,7 @@ import type {
   DesktopAuthSessionSnapshot,
   SupportSubmitReportRequest,
 } from "../../../ipc-contracts/window-types";
+import { REPORT_LOG_TAIL_MAX_BYTES } from "@traycer-clients/shared/support/image-attachment-guards";
 
 vi.mock("electron", () => ({
   app: {
@@ -38,6 +39,7 @@ vi.mock("@sentry/electron/main", () => ({
 }));
 
 import * as Sentry from "@sentry/electron/main";
+import { shell } from "electron";
 import { DesktopSupportService } from "../support";
 
 const EMPTY_REPORT_FORM: SupportSubmitReportRequest = {
@@ -49,6 +51,7 @@ const EMPTY_REPORT_FORM: SupportSubmitReportRequest = {
   allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
+  includeBrowserDiagnostics: true,
   includeDiagnostics: true,
   images: [],
   overrideTitle: null,
@@ -90,6 +93,10 @@ async function withPidMetadataFile(
       ),
       substrateFile: join(dir, "substrate.json"),
       transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
       environment: "production",
     });
   } finally {
@@ -382,6 +389,303 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
       expect(image?.data).toBeInstanceOf(Uint8Array);
       // Images must never ride through the scrubbed contexts object.
       expect(hint?.captureContext?.contexts ?? {}).not.toHaveProperty("images");
+    });
+  });
+});
+
+/**
+ * Ticket 03 / plan D3: the seek-based jsonl tail window, exercised through
+ * the service's public surface (`freezeEvidence` + `readFrozenLogTail`)
+ * rather than the private reader functions - what matters is what a
+ * consent-panel "view" click or a submitted attachment actually contains.
+ */
+describe("DesktopSupportService browser diagnostics jsonl tail window (ticket 03)", () => {
+  it("resolves an empty, non-truncated tail when neither browser file exists", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      const service = buildService(hostLayout);
+      await service.freezeEvidence(KEY, null);
+      const result = await service.readFrozenLogTail(KEY, "browserTrace");
+      expect(result.lines).toEqual([]);
+      expect(result.truncated).toBe(false);
+    });
+  });
+
+  it("concatenates the .1 rotation file before the live file, in that order", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      await writeFile(
+        hostLayout.browserTraceRotatedFile,
+        '{"seq":1,"source":"rotated"}\n{"seq":2,"source":"rotated"}\n',
+        "utf8",
+      );
+      await writeFile(
+        hostLayout.browserTraceFile,
+        '{"seq":3,"source":"live"}\n',
+        "utf8",
+      );
+      const service = buildService(hostLayout);
+      await service.freezeEvidence(KEY, null);
+      const result = await service.readFrozenLogTail(KEY, "browserTrace");
+      expect(result.truncated).toBe(false);
+      expect(result.lines).toEqual([
+        '{"seq":1,"source":"rotated"}',
+        '{"seq":2,"source":"rotated"}',
+        '{"seq":3,"source":"live"}',
+      ]);
+    });
+  });
+
+  it("windows a large combined trace to the trailing bytes and drops the partial head record", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      const lineFor = (seq: number): string =>
+        `{"seq":"${String(seq).padStart(6, "0")}","pad":"${"x".repeat(20)}"}\n`;
+      // 40_000 fixed-width lines is comfortably over the 512_000-byte window
+      // on its own, so the trailing window necessarily starts mid-file - and,
+      // for most seeks, mid-record.
+      const rotatedLines = Array.from({ length: 40_000 }, (_, i) => lineFor(i));
+      await writeFile(
+        hostLayout.browserTraceRotatedFile,
+        rotatedLines.join(""),
+        "utf8",
+      );
+      const liveLines = [lineFor(40_000), lineFor(40_001), lineFor(40_002)];
+      await writeFile(hostLayout.browserTraceFile, liveLines.join(""), "utf8");
+
+      const service = buildService(hostLayout);
+      await service.freezeEvidence(KEY, null);
+      const result = await service.readFrozenLogTail(KEY, "browserTrace");
+
+      expect(result.truncated).toBe(true);
+      // The live file is read last and is far smaller than the window, so
+      // every one of its lines survives in full, in order.
+      expect(result.lines.slice(-3)).toEqual([
+        lineFor(40_000).trimEnd(),
+        lineFor(40_001).trimEnd(),
+        lineFor(40_002).trimEnd(),
+      ]);
+      // The earliest rotated lines are outside the trailing window.
+      expect(result.lines).not.toContain(lineFor(0).trimEnd());
+      // A byte window can begin mid-record; every surviving line must still
+      // be independently valid JSON - proof the partial head record was
+      // dropped, not shipped broken (correct for jsonl).
+      for (const line of result.lines) {
+        expect(() => JSON.parse(line)).not.toThrow();
+      }
+    });
+  });
+
+  it("reads from the rotated file alone when the live file is missing", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      await writeFile(
+        hostLayout.browserTraceRotatedFile,
+        '{"seq":1,"source":"rotated"}\n',
+        "utf8",
+      );
+      const service = buildService(hostLayout);
+      await service.freezeEvidence(KEY, null);
+      const result = await service.readFrozenLogTail(KEY, "browserTrace");
+      expect(result.truncated).toBe(false);
+      expect(result.lines).toEqual(['{"seq":1,"source":"rotated"}']);
+    });
+  });
+
+  it("reads from the live file alone when the rotated .1 file is missing", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      await writeFile(
+        hostLayout.browserTraceFile,
+        '{"seq":1,"source":"live"}\n',
+        "utf8",
+      );
+      const service = buildService(hostLayout);
+      await service.freezeEvidence(KEY, null);
+      const result = await service.readFrozenLogTail(KEY, "browserTrace");
+      expect(result.truncated).toBe(false);
+      expect(result.lines).toEqual(['{"seq":1,"source":"live"}']);
+    });
+  });
+
+  it("keeps a complete first live record when the rotated file falls exactly outside the byte window", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      const firstLine = '{"seq":1}\n';
+      const secondLinePrefix = '{"pad":"';
+      const secondLineSuffix = '"}\n';
+      const secondLine = `${secondLinePrefix}${"x".repeat(
+        REPORT_LOG_TAIL_MAX_BYTES -
+          Buffer.byteLength(firstLine + secondLinePrefix + secondLineSuffix),
+      )}${secondLineSuffix}`;
+      await writeFile(
+        hostLayout.browserTraceRotatedFile,
+        '{"seq":0}\n',
+        "utf8",
+      );
+      await writeFile(
+        hostLayout.browserTraceFile,
+        firstLine + secondLine,
+        "utf8",
+      );
+
+      const service = buildService(hostLayout);
+      await service.freezeEvidence(KEY, null);
+      const result = await service.readFrozenLogTail(KEY, "browserTrace");
+
+      expect(result.truncated).toBe(true);
+      expect(result.lines.at(0)).toBe('{"seq":1}');
+    });
+  });
+
+  it("inserts a newline between a torn rotated tail and the live file's first record", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      // No trailing newline on the rotated file - a crash/kill mid-write can
+      // leave the last flush torn like this. Without the fix the two records
+      // fuse into one unparseable line.
+      await writeFile(
+        hostLayout.browserTraceRotatedFile,
+        '{"seq":1,"source":"rotated"}',
+        "utf8",
+      );
+      await writeFile(
+        hostLayout.browserTraceFile,
+        '{"seq":2,"source":"live"}\n',
+        "utf8",
+      );
+      const service = buildService(hostLayout);
+      await service.freezeEvidence(KEY, null);
+      const result = await service.readFrozenLogTail(KEY, "browserTrace");
+      expect(result.truncated).toBe(false);
+      expect(result.lines).toEqual([
+        '{"seq":1,"source":"rotated"}',
+        '{"seq":2,"source":"live"}',
+      ]);
+    });
+  });
+
+  it("drops the sole line entirely when the window captures only a truncated head record", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      // One record with no newline anywhere in the file, comfortably larger
+      // than the 512_000-byte window - the captured window is exactly one
+      // (partial) line. Unconditionally dropping the "head" record (ruling
+      // 4) correctly yields empty output here rather than shipping one
+      // truncated, unparseable line.
+      const hugeLine = `{"seq":1,"pad":"${"x".repeat(700_000)}"}`;
+      await writeFile(hostLayout.browserTraceFile, hugeLine, "utf8");
+
+      const service = buildService(hostLayout);
+      await service.freezeEvidence(KEY, null);
+      const result = await service.readFrozenLogTail(KEY, "browserTrace");
+
+      expect(result.truncated).toBe(true);
+      expect(result.lines).toEqual([]);
+    });
+  });
+});
+
+/**
+ * Ticket 03 / plan D3: absence of `browser-trace.jsonl` is the normal
+ * production state, so the manifest must filter on existence (unlike
+ * `desktop`/`host`, always listed) and neither `revealLog` nor `tailLog` may
+ * ever fabricate a browser file the host did not write.
+ */
+describe("DesktopSupportService browser diagnostics existence handling (ticket 03)", () => {
+  it("omits both browser entries from the snapshot manifest when neither file exists", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      const service = buildService(hostLayout);
+      const snapshot = await service.getSnapshot();
+      const targets = snapshot.logs.map((entry) => entry.target);
+      expect(targets).toEqual(["desktop", "host"]);
+    });
+  });
+
+  it("lists only the browser file(s) that actually exist", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      await writeFile(hostLayout.browserTelemetryFile, "{}\n", "utf8");
+      const service = buildService(hostLayout);
+      const snapshot = await service.getSnapshot();
+      const targets = snapshot.logs.map((entry) => entry.target);
+      expect(targets).toEqual(["desktop", "host", "browserTelemetry"]);
+    });
+  });
+
+  it("lists both browser entries once both files exist", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      await writeFile(hostLayout.browserTelemetryFile, "{}\n", "utf8");
+      await writeFile(hostLayout.browserTraceFile, "{}\n", "utf8");
+      const service = buildService(hostLayout);
+      const snapshot = await service.getSnapshot();
+      const targets = snapshot.logs.map((entry) => entry.target);
+      expect(targets).toEqual([
+        "desktop",
+        "host",
+        "browserTelemetry",
+        "browserTrace",
+      ]);
+    });
+  });
+
+  it("never creates a missing browser file on reveal, and never asks the shell to show it", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      const service = buildService(hostLayout);
+      await service.revealLog("browserTrace");
+      await expect(stat(hostLayout.browserTraceFile)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(shell.showItemInFolder).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reveals an existing browser file normally", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      await writeFile(hostLayout.browserTraceFile, "{}\n", "utf8");
+      const service = buildService(hostLayout);
+      const result = await service.revealLog("browserTrace");
+      expect(result.path).toBe(hostLayout.browserTraceFile);
+      expect(shell.showItemInFolder).toHaveBeenCalledWith(
+        hostLayout.browserTraceFile,
+      );
+    });
+  });
+
+  it("never creates a missing browser file on tailLog, and returns an empty tail", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      const service = buildService(hostLayout);
+      const result = await service.tailLog({
+        target: "browserTrace",
+        tailLines: 100,
+      });
+      expect(result.lines).toEqual([]);
+      await expect(stat(hostLayout.browserTraceFile)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  });
+
+  it("tails rotated and live browser logs as one stream", async () => {
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      await writeFile(
+        hostLayout.browserTelemetryRotatedFile,
+        '{"seq":1}\n{"seq":2}\n',
+        "utf8",
+      );
+      await writeFile(hostLayout.browserTelemetryFile, '{"seq":3}\n', "utf8");
+      await writeFile(
+        hostLayout.browserTraceRotatedFile,
+        '{"seq":1}\n{"seq":2}',
+        "utf8",
+      );
+      await writeFile(hostLayout.browserTraceFile, '{"seq":3}\n', "utf8");
+
+      const service = buildService(hostLayout);
+      const telemetry = await service.tailLog({
+        target: "browserTelemetry",
+        tailLines: 2,
+      });
+      const trace = await service.tailLog({
+        target: "browserTrace",
+        tailLines: 2,
+      });
+
+      expect(telemetry.lines).toEqual(['{"seq":2}', '{"seq":3}']);
+      expect(trace.lines).toEqual(['{"seq":2}', '{"seq":3}']);
+      expect(telemetry.truncated).toBe(true);
+      expect(trace.truncated).toBe(true);
     });
   });
 });

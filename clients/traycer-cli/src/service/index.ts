@@ -9,6 +9,14 @@ import { createMacosController } from "./platforms/macos";
 import { createWindowsController } from "./platforms/windows";
 import { clearStopIntent, writeStopIntent } from "../host/stop-intent";
 import { findLiveIncumbentHost } from "../host/incumbent-check";
+import { hostHomeDir } from "../store/paths";
+import {
+  CLI_INVOCATION_TXN_POLL_MS,
+  CLI_INVOCATION_TXN_WAIT_MS,
+  runServiceRegistrationWithInvocationRecord,
+  runServiceRemovalWithInvocationRecord,
+  runServiceUninstallWithInvocationRecord,
+} from "./cli-invocation-record";
 
 export type { ServiceLabel } from "./label";
 export { serviceLabelFor, serviceManifestPath, windowsTaskName } from "./label";
@@ -95,10 +103,24 @@ export type CompetingRegistrationRetirement =
       readonly manifestRemoved: boolean;
       readonly agentStartRequested: boolean;
     }
+  // A failed repair still reports what it DID: `bootedOut` / `manifestRemoved`
+  // are the halves that succeeded before or beside the one that failed, and
+  // together with `bootoutIndeterminate` they decide whether the
+  // registration may have been touched at all. `bootoutFailed` alone cannot:
+  // it is also set when no bootout was attempted (an owner that could not be
+  // read), and when one WAS attempted and failed, "not confirmed" is not
+  // "did not happen" - a `bootout --wait` timeout kills the waiter after
+  // launchd may already have accepted the eviction. So a bootout that was
+  // attempted and did not confirm is `bootoutIndeterminate`, and counts as
+  // a possible removal; one never attempted, beside a manifest that was
+  // already absent, provably removed nothing.
   | {
       readonly kind: "retire-failed";
       readonly bootoutFailed: boolean;
       readonly manifestRemovalFailed: boolean;
+      readonly bootedOut: boolean;
+      readonly bootoutIndeterminate: boolean;
+      readonly manifestRemoved: boolean;
     };
 
 // Outcome of `ServiceController.takeoverDesktopRegistration`.
@@ -329,6 +351,75 @@ async function retireIntentIfHostSurvived(
   await clearStopIntent(environment);
 }
 
+/**
+ * Persist the exact structured CLI invocation used for registration, and
+ * remove it only after a confirmed matching uninstall. Wrapped HERE, at the
+ * production factory, so Linux/macOS/Windows emitters stay unchanged and no
+ * future install/uninstall path can skip the transaction.
+ *
+ * Inner relative to `withStopIntent`: a stop-intent write still precedes the
+ * OS uninstall, and the invocation record is removed only after that
+ * uninstall resolves.
+ */
+export function withCliInvocationRecord(
+  controller: ServiceController,
+): ServiceController {
+  return {
+    ...controller,
+    install: (options) =>
+      runServiceRegistrationWithInvocationRecord({
+        environment: options.label.environment,
+        hostHomeDir: hostHomeDir(options.label.environment),
+        serviceLabel: options.label.id,
+        cli: options.cli,
+        register: () => controller.install(options),
+        waitMs: CLI_INVOCATION_TXN_WAIT_MS,
+        pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
+      }),
+    uninstall: (options) =>
+      runServiceUninstallWithInvocationRecord({
+        environment: options.label.environment,
+        hostHomeDir: hostHomeDir(options.label.environment),
+        serviceLabel: options.label.id,
+        uninstall: () => controller.uninstall(options),
+        waitMs: CLI_INVOCATION_TXN_WAIT_MS,
+        pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
+      }),
+    // The competing-registration repair removes THIS label's registration -
+    // the one a live record describes - on macOS when Desktop owns host
+    // registration, so it runs inside the same transaction as an uninstall.
+    // `removed` is decided from what the result says HAPPENED or MAY have
+    // happened, not from its kind alone: `retired` always took the
+    // registration away, and a `retire-failed` did so when one of its
+    // halves succeeded (a half-retired registration is as gone for the
+    // record's purposes as a deleted one) or when the eviction was attempted
+    // and never confirmed - the record must not outlive a bootout launchd
+    // may have accepted. Only a repair that provably touched nothing (no
+    // bootout attempted, manifest already absent) leaves the record alone,
+    // since invalidating a valid record for it would send every later
+    // maintenance run through OS recovery for an intact service. Every
+    // other outcome touched nothing and leaves the record alone. Desktop's
+    // own `<label>.agent` registration is never what the host recovers or
+    // records, so `takeoverDesktopRegistration` stays outside.
+    retireCompetingRegistration: (label) =>
+      runServiceRemovalWithInvocationRecord<CompetingRegistrationRetirement>({
+        environment: label.environment,
+        hostHomeDir: hostHomeDir(label.environment),
+        serviceLabel: label.id,
+        operation: "retired",
+        remove: () => controller.retireCompetingRegistration(label),
+        removed: (result) =>
+          result.kind === "retired" ||
+          (result.kind === "retire-failed" &&
+            (result.bootedOut ||
+              result.bootoutIndeterminate ||
+              result.manifestRemoved)),
+        waitMs: CLI_INVOCATION_TXN_WAIT_MS,
+        pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
+      }),
+  };
+}
+
 export function withStopIntent(
   controller: ServiceController,
 ): ServiceController {
@@ -390,6 +481,17 @@ export function withStopIntent(
   };
 }
 
+/**
+ * Decorator order is load-bearing: the invocation-record decorator is the
+ * OUTER one. Its uninstall first validates the state directory and acquires
+ * the record transaction, and either can fail before the OS backend is ever
+ * called. Were the stop-intent decorator outside it, that failure would
+ * happen with a stop intent already published - and `retireIntentIfHostSurvived`
+ * deliberately keeps the intent when the host cannot be reached, so a
+ * supervisor would sit silenced for the intent's lifetime with no uninstall
+ * having occurred. Inside the transaction, the intent is announced only once
+ * the backend uninstall is actually about to run.
+ */
 export function createServiceController(): ServiceController {
   const platform = osPlatform();
   const logger = createCliLogger(config.environment);
@@ -401,19 +503,21 @@ export function createServiceController(): ServiceController {
     logger.debug("Service controller selected macOS backend", {
       environment: config.environment,
     });
-    return withStopIntent(createMacosController(null));
+    return withCliInvocationRecord(withStopIntent(createMacosController(null)));
   }
   if (platform === "linux") {
     logger.debug("Service controller selected Linux backend", {
       environment: config.environment,
     });
-    return withStopIntent(createLinuxController(null));
+    return withCliInvocationRecord(withStopIntent(createLinuxController(null)));
   }
   if (platform === "win32") {
     logger.debug("Service controller selected Windows backend", {
       environment: config.environment,
     });
-    return withStopIntent(createWindowsController(null));
+    return withCliInvocationRecord(
+      withStopIntent(createWindowsController(null)),
+    );
   }
   logger.error(
     "Service controller unsupported platform",

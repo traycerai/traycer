@@ -52,6 +52,8 @@ import { MentionMenuItem } from "./mention-menu-item";
 import { MentionPreviewPanel } from "./mention-preview-panel";
 import { SlashMenuItem } from "./slash-menu-item";
 import { ZERO_DOM_RECT } from "./zero-dom-rect";
+import { useComposedRefs } from "radix-ui/internal";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 const SLASH_MENU_COPY = {
   header: "Slash commands",
@@ -182,6 +184,8 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const floatingRef = useRef<HTMLDivElement | null>(null);
   const previewPanelRef = useRef<HTMLDivElement | null>(null);
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
+  const composedFloatingRef = useComposedRefs(floatingRef, registerOverlayRef);
   const isMobile = useIsMobileViewport();
 
   const renderedItems = useMemo<ReadonlyArray<RenderedItem>>(
@@ -303,7 +307,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   // re-managing the scrollbar the Dialog already owns.
   const menu = (
     <RemoveScroll
-      ref={floatingRef}
+      ref={composedFloatingRef}
       forwardProps
       enabled
       noIsolation={!isolateOutsideScroll}
@@ -314,7 +318,6 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
       <div
         role="presentation"
         data-slot="composer-menu"
-        data-browser-overlay="composer-menu"
         // top-0/left-0 so floating-ui's translate3d is the source of truth.
         // Width fits content (w-max) so short menus stay compact and long command
         // names render in full, with a comfortable floor (min-w) and a

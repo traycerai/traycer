@@ -25,6 +25,8 @@ import {
 } from "@/components/layout/shell/nav-drawer-motion";
 import { useNavDrawerClosePull } from "@/components/layout/shell/use-nav-drawer-close-pull";
 import { useModalSurfaceContainment } from "@/components/layout/shell/use-modal-surface-containment";
+import { useComposedRefs } from "radix-ui/internal";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 import { cn } from "@/lib/utils";
 
 interface MobileNavDrawerSurfaceProps {
@@ -72,6 +74,14 @@ export function MobileNavDrawerSurface(
   const x = useMotionValue(0);
   const layerRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  // The drawer portals its own `role="dialog"` straight to `document.body`
+  // rather than going through a shadcn wrapper, so it has to register itself:
+  // the occlusion coordinator reads an explicit registry, and an unregistered
+  // panel would let an intersecting `WebContentsView` composite on top of the
+  // navigation. Registration is unconditional - a closed drawer is parked off
+  // screen by the wrapper's transform, so its rect intersects nothing.
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
+  const composedPanelRef = useComposedRefs(panelRef, registerOverlayRef);
   const settleRef = useRef<AnimationPlaybackControls | null>(null);
   // The endpoint the running settle is travelling to, or null when none is.
   // Kept so a resize mid-flight can re-aim it at the width that now exists.
@@ -433,7 +443,7 @@ export function MobileNavDrawerSurface(
           resolves against the shortened park. */}
       <div className="absolute top-safe-top bottom-0 left-safe-left w-3/4 -translate-x-full sm:max-w-sm">
         <m.div
-          ref={panelRef}
+          ref={composedPanelRef}
           role="dialog"
           aria-modal={settledOpen}
           aria-label="Menu"

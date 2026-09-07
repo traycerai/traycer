@@ -53,6 +53,10 @@ function getFollowingClient(): HostClient<HostRpcRegistry> {
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: getFollowingClient,
+  useHostBinding: () => ({
+    hostClient: getGlobalClient(),
+    hostId: null,
+  }),
   // `useHostClientForHostId` reads BOTH through the barrel: the spine for
   // the directory lookups, the effective host for the following branch.
   useHostRuntimeClient: getGlobalClient,
@@ -71,6 +75,20 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => ({
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: directoryState.data }),
+}));
+
+// `<TabHostProvider>` also mounts the cross-device drafts mirror, whose
+// session reaches `useHostDirectory()` / `useAuthService()` and a
+// `useHostQuery` - all of which want a real `<HostRuntimeProvider>` and a
+// `QueryClientProvider` around a suite that deliberately has neither. Every
+// other tile suite dodges it through the mount's own escape hatch (a `null`
+// `useHostBinding`, which makes it render nothing), but this one CANNOT: its
+// subject, `useHostClientForHostId`, reads that binding to resolve a named
+// host, so the mock above has to hand back a real one. Stub the mount
+// instead - it renders `null` in both branches and carries only effects,
+// none of which this suite is about.
+vi.mock("@/hooks/drafts/use-tab-draft-mirror", () => ({
+  TabDraftMirrorMount: () => null,
 }));
 
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -160,15 +178,17 @@ describe("useTabHostClient", () => {
     expect(result.current.byId?.getActiveHostId()).toBe(TAB_HOST.hostId);
   });
 
-  it("agrees with useHostClientForHostId on `null` when the tab's host is nowhere in the directory", () => {
+  it("agrees with useHostClientForHostId on an unresolved identity requester when the tab's host is nowhere in the directory", () => {
     globalClientRef.value = buildGlobalClient(() => [mockLocalHostEntry]);
     directoryState.data = [mockLocalHostEntry];
     const { result } = renderHook(() => useBothClients("host-nobody-knows"), {
       wrapper: tabWrapper("host-nobody-knows"),
     });
 
-    expect(result.current.tab).toBeNull();
-    expect(result.current.byId).toBeNull();
+    expect(result.current.tab).not.toBeNull();
+    expect(result.current.byId).not.toBeNull();
+    expect(result.current.tab?.getActiveHostId()).toBeNull();
+    expect(result.current.byId?.getActiveHostId()).toBeNull();
   });
 
   it("stays a pinned requester - never the mutable default client - even when the tab's host IS the app-wide default", () => {
@@ -208,7 +228,7 @@ describe("useTabHostClient", () => {
     );
   });
 
-  it("returns null with no authenticated request context (signed out), like its sibling", () => {
+  it("keeps identity requesters with no authenticated request context so readiness owns the auth gate", () => {
     const globalClient = buildGlobalClient(() => [
       mockLocalHostEntry,
       TAB_HOST,
@@ -220,7 +240,9 @@ describe("useTabHostClient", () => {
       wrapper: tabWrapper(TAB_HOST.hostId),
     });
 
-    expect(result.current.tab).toBeNull();
-    expect(result.current.byId).toBeNull();
+    expect(result.current.tab).not.toBeNull();
+    expect(result.current.byId).not.toBeNull();
+    expect(result.current.tab?.getActiveHostId()).toBe(TAB_HOST.hostId);
+    expect(result.current.byId?.getActiveHostId()).toBe(TAB_HOST.hostId);
   });
 });

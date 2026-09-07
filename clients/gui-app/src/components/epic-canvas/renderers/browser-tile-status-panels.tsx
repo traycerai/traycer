@@ -5,16 +5,18 @@ import type {
   BrowserViewDownloadChange,
 } from "@traycer-clients/shared/platform/browser-view";
 import { cn } from "@/lib/utils";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 export function BrowserTileDownloadStrip(props: {
   readonly downloads: readonly BrowserViewDownloadChange[];
   readonly onCancel: (downloadId: string) => void;
 }) {
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
   const visibleDownloads = props.downloads.slice(-3);
   if (visibleDownloads.length === 0) return null;
   return (
     <div
-      data-browser-overlay="browser-downloads"
+      ref={registerOverlayRef}
       className="pointer-events-auto absolute bottom-3 left-3 z-20 flex w-[min(92%,30rem)] flex-col gap-2"
     >
       {visibleDownloads.map((download) => (
@@ -33,11 +35,12 @@ export function BrowserTileCertificateInterstitial(props: {
   readonly onProceed: () => void;
   readonly proceeding: boolean;
 }) {
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
   const certificateError = props.certificateError;
   if (certificateError === null) return null;
   return (
     <div
-      data-browser-overlay="browser-certificate-error"
+      ref={registerOverlayRef}
       className="absolute inset-0 z-20 flex items-center justify-center bg-background/95 px-4 text-foreground"
     >
       <div className="flex w-[min(92vw,34rem)] flex-col gap-4 rounded-md border border-destructive/30 bg-popover p-5 shadow-lg">

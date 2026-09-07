@@ -1,4 +1,5 @@
 export {
+  isIncompatibleCloseForMethod,
   isMethodIncompatibleClose,
   type IStreamSession,
   type ServerFrameHandler,

@@ -15,11 +15,9 @@ import type {
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
-import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
   clampArtifactVersionHistoryPanelWidthPx,
   DEFAULT_ARTIFACT_VERSION_HISTORY_PANEL_WIDTH_PX,
@@ -77,6 +75,7 @@ const state = vi.hoisted(() => ({
   openedChats: [] as Array<{
     readonly tabId: string;
     readonly node: OpenedChatNode;
+    readonly gesture: string;
   }>,
   historyEntries: [] as ArtifactVersionObservationEntry[],
   historyNextCursor: null as string | null,
@@ -127,8 +126,19 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({
-    openTilePreviewInTab: (tabId: string, node: OpenedChatNode) => {
-      state.openedChats.push({ tabId, node });
+    // The one navigation entry point since the tile-open refactor: the
+    // provenance link expresses "preview into this tab" as an intent.
+    openTile: (intent: {
+      readonly node: OpenedChatNode;
+      readonly target: { readonly tabId: string } | { readonly epicId: string };
+      readonly gesture: string;
+    }) => {
+      if (!("tabId" in intent.target)) throw new Error("expected a tab target");
+      state.openedChats.push({
+        tabId: intent.target.tabId,
+        node: intent.node,
+        gesture: intent.gesture,
+      });
     },
   }),
 }));
@@ -331,11 +341,18 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     useArtifactVersionHistoryPanelStore.setState({
       panelWidthPx: DEFAULT_ARTIFACT_VERSION_HISTORY_PANEL_WIDTH_PX,
     });
-    epicHandle = createOpenEpicStore({
+    // The store stopped constructing a runtime, so the stream factory goes to
+    // the COMPOSITION the harness spawns rather than to the store. This suite
+    // never writes through the command queue - it drives the history panel's
+    // RPCs, which are mocked above - hence `writeCommand: null`.
+    epicHandle = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: noopEpicStreamClientFactory,
       userId: null,
-      onAuthError: null,
+      factories: {
+        streamClientFactory: noopEpicStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     state.supportedMethods = new Set(HISTORY_METHODS);
     state.supportError = false;
@@ -603,6 +620,8 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     expect(state.openedChats).toEqual([
       {
         tabId: "tab-a",
+        // `single` is what the resolver reads as a PREVIEW open.
+        gesture: "single",
         node: {
           id: "chat-observation-linked",
           instanceId: "instance-chat-observation-linked",

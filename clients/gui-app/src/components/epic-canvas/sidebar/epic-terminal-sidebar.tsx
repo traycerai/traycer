@@ -22,6 +22,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type MouseEvent,
 } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useDraggable } from "@dnd-kit/core";
@@ -54,14 +55,11 @@ import {
   type EpicCanvasTerminalTileDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import { cn } from "@/lib/utils";
-import {
-  findOpenTileInTab,
-  useEpicCanvasStore,
-  useIsActiveTile,
-} from "@/stores/epics/canvas/store";
+import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import {
   useEpicLeftPanelStore,
   useLeftPanelSectionCollapsed,
@@ -117,42 +115,27 @@ function TerminalsPanelBodyLive(props: {
 }) {
   const { epicId, tabId } = props;
   const panel = useEpicTerminalsPanel({ epicId });
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
-  const prepareSetActiveTileTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareSetActiveTileTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
 
   const prepareOpenRow = panel.prepareOpenRow;
   const openExisting = useCallback(
-    (row: TerminalSidebarSessionRow) => {
+    (row: TerminalSidebarSessionRow, event: MouseEvent<HTMLElement>) => {
       const tile = prepareOpenRow(row);
       if (tile === null) return;
-      const found = findOpenTileInTab(tabId, tile);
-      if (found !== null) {
-        navigateNested(epicId, tabId, () =>
-          prepareSetActiveTileTabFocusTarget(
-            tabId,
-            found.paneId,
-            found.instanceId,
-          ),
-        );
-        return;
-      }
-      navigateNested(epicId, tabId, () =>
-        prepareOpenTileInTabFocusTarget(tabId, tile),
-      );
+      openTile({
+        node: tile,
+        target: { tabId },
+        // Explicit, not `single`: double-click on a terminal row is RENAME, so
+        // no gesture would ever promote a previewed terminal tile and clicking
+        // row A then row B would evict A.
+        gesture: "explicit",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
     },
-    [
-      epicId,
-      navigateNested,
-      prepareOpenRow,
-      prepareOpenTileInTabFocusTarget,
-      prepareSetActiveTileTabFocusTarget,
-      tabId,
-    ],
+    [openTile, prepareOpenRow, tabId],
   );
 
   return (
@@ -200,7 +183,10 @@ interface TerminalSidebarBodyProps {
   readonly panel: EpicTerminalsPanel;
   readonly epicId: string;
   readonly tabId: string;
-  readonly onOpen: (row: TerminalSidebarSessionRow) => void;
+  readonly onOpen: (
+    row: TerminalSidebarSessionRow,
+    event: MouseEvent<HTMLElement>,
+  ) => void;
 }
 
 function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
@@ -240,7 +226,7 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
           session={row.session}
           runtimeStatus={row.runtimeStatus}
           durable={row.durable}
-          onOpen={() => props.onOpen(row)}
+          onOpen={(event) => props.onOpen(row, event)}
           authority={panel}
         />
       ))}
@@ -269,7 +255,7 @@ interface TerminalRowProps {
   readonly session: ListedTerminalSidebarSession;
   readonly runtimeStatus: "running" | "dormant" | "unknown";
   readonly durable: boolean;
-  readonly onOpen: () => void;
+  readonly onOpen: (event: MouseEvent<HTMLElement>) => void;
   readonly authority: EpicTerminalRowAuthority;
 }
 
@@ -438,7 +424,7 @@ function TerminalRow(props: TerminalRowProps) {
                       ? "bg-accent font-medium text-accent-foreground"
                       : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
                   )}
-                  onClick={() => onOpen()}
+                  onClick={onOpen}
                   onDoubleClick={handleDoubleClick}
                 >
                   <TerminalIcon className="size-3.5 shrink-0 text-muted-foreground/70" />

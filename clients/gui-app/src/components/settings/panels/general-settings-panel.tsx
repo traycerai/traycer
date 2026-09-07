@@ -489,6 +489,7 @@ function SettingsLocalAppStateSection() {
         }
       />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title="Clear local app state?"
