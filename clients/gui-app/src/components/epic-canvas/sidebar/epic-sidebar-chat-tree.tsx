@@ -573,10 +573,23 @@ function usePanelRootIds(
     // `parentId` to its sender) are nested through `useChildIds` off
     // `childrenByParent` and are absent from `rootIds`, so they correctly
     // never appear here.
+    // No clock HERE, deliberately, and not an oversight: these roots are not
+    // the rendered order. `mergeChatListEntries` re-orders them downstream
+    // against `chatListLastActiveAtByKey` - the same clock re-keyed for the
+    // interleave with the cloud-only rows - so the panel's rows already
+    // follow a publication, and clocking here would only move where that is
+    // decided. The picker, which has no interleave to run, clocks its own
+    // roots instead.
+    //
+    // The one other consumer, the `selectableIds` walk below, DOES take this
+    // order for its roots (its child levels are clocked). Its root order can
+    // therefore differ from the rendered one - a pre-existing seam, left
+    // alone here rather than changed as a side effect of a sorting fix.
     return sidebarTreeRootIds({
       tree,
       treeFilter: CHATS_TREE_FILTER,
       comparator,
+      clock: null,
     });
   }, [panelId, tree, comparator]);
 }
