@@ -67,7 +67,12 @@ vi.mock("node:fs/promises", async (importActual) => {
   };
 });
 
-import { detectShells, listShells, probeShellPath } from "../store";
+import {
+  detectShells,
+  isGitBashShellPath,
+  listShells,
+  probeShellPath,
+} from "../store";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -306,5 +311,43 @@ describe("probeShellPath", () => {
       exists: true,
       executable: false,
     });
+  });
+});
+
+describe("isGitBashShellPath", () => {
+  // Exported for the host's managed-command interpreter classifier: a
+  // CONFIGURED Git Bash has to be recognised by the same rule that labels the
+  // row the user picked here, or Settings and the shell an agent's command
+  // actually meets can disagree with nobody able to see why.
+  it("matches a Git-for-Windows bash in either install layout", () => {
+    expect(isGitBashShellPath("C:\\Program Files\\Git\\bin\\bash.exe")).toBe(
+      true,
+    );
+    expect(
+      isGitBashShellPath("C:\\Program Files\\Git\\usr\\bin\\bash.exe"),
+    ).toBe(true);
+  });
+
+  it("is case- and separator-insensitive, because the configured path is user-typed", () => {
+    // Detection builds win32-separator paths, but Settings → Shell accepts
+    // whatever the user pastes.
+    expect(isGitBashShellPath("c:/program files/GIT/BIN/BASH.EXE")).toBe(true);
+    expect(isGitBashShellPath("C:/Users/me/git/usr/bin/bash.exe")).toBe(true);
+  });
+
+  it("does not claim a plain bash.exe, which keeps its basename label", () => {
+    // Pinned against the detection test above: `C:\msys\bin\bash.exe` is
+    // labelled `bash.exe`, so it must not classify as Git Bash here either.
+    expect(isGitBashShellPath("C:\\msys\\bin\\bash.exe")).toBe(false);
+    expect(isGitBashShellPath("C:\\Windows\\System32\\bash.exe")).toBe(false);
+  });
+
+  it("does not claim a non-bash executable that merely lives under a git directory", () => {
+    expect(isGitBashShellPath("C:\\Program Files\\Git\\bin\\sh.exe")).toBe(
+      false,
+    );
+    expect(isGitBashShellPath("C:\\Program Files\\Git\\cmd\\git.exe")).toBe(
+      false,
+    );
   });
 });

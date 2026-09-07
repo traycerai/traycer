@@ -247,6 +247,31 @@ function pathScanCandidates(isWindows: boolean): string[] {
 }
 
 /**
+ * Whether a path names a Git-for-Windows `bash.exe`, i.e. the thing this
+ * module labels "Git Bash" in the Settings picker.
+ *
+ * Deliberately narrow — a Git-named install directory, not any MSYS layout.
+ * `C:\msys\bin\bash.exe` is a plain bash and keeps its basename label; the
+ * broader `<install>\bin\bash.exe` reading belongs to
+ * `windowsShellCaptionFamily` / the host's env-probe family, which are asking
+ * a different question (how do I read this shell's profile?) and can afford
+ * to be inclusive because a wrong guess there just degrades to a fallback.
+ *
+ * Exported because the host's managed-command interpreter classifier has to
+ * recognise a *configured* Git Bash, and a second copy of this rule would
+ * drift from the label the user is looking at in Settings. Separators are
+ * normalised because that path is user-typed and may use forward slashes,
+ * which detection's own win32-built paths never do.
+ */
+export function isGitBashShellPath(shellPath: string): boolean {
+  const lower = shellPath.toLowerCase().replaceAll("/", "\\");
+  return (
+    nodePath.win32.basename(lower) === "bash.exe" &&
+    (lower.includes("\\git\\bin\\") || lower.includes("\\git\\usr\\bin\\"))
+  );
+}
+
+/**
  * A friendly display name for a detected shell: WSL and Git Bash get recognised
  * labels (both are `*.exe` whose basename would otherwise read as `wsl.exe` /
  * `bash.exe`); everything else is just its basename. Purely cosmetic - never a
@@ -257,11 +282,7 @@ function friendlyShellName(shellPath: string, isWindows: boolean): string {
   const api = pathApiFor(isWindows);
   const base = api.basename(shellPath);
   if (base.toLowerCase() === "wsl.exe") return "WSL";
-  const lower = shellPath.toLowerCase();
-  if (
-    base.toLowerCase() === "bash.exe" &&
-    (lower.includes("\\git\\bin\\") || lower.includes("\\git\\usr\\bin\\"))
-  ) {
+  if (isGitBashShellPath(shellPath)) {
     return "Git Bash";
   }
   return base;
