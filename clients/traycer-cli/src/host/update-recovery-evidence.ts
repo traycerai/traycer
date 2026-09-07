@@ -676,6 +676,28 @@ function authenticatedRefusalReason(err: unknown): string | null {
   // read back by later runs and by `host doctor`; that is sufficient on its
   // own, and it always was.
   //
+  // What the cap is NOT, checked rather than assumed (cold review B asked):
+  // the store does not bound the size of what it writes, so an oversized
+  // message could not make the FAILURE record unwritable and this is not a
+  // correctness guard against a failure-path write that fails. Both decoders
+  // validate SHAPE only - `store.ts:436`'s `nonEmptyString` is
+  // `typeof === "string" && length > 0`, and the protocol's
+  // `host-update-attempt.ts:665` checks `typeof raw.message !== "string"` and
+  // nothing else. No `max`, no byte cap, on either side. (The refusals an
+  // ablation of this value produces at `store.ts:538` are that same
+  // non-empty check, which is worth knowing before anyone reads them as a
+  // size limit.) The cap is a bound on unbounded host-authored text entering
+  // a durable record, which is a smaller claim and the true one.
+  //
+  // And the support that survives any GUI decision: the record is
+  // protocol-visible. `host.status.operation.error` crosses the wire - the
+  // GUI reads it off a wire observation at
+  // `gui-app/src/lib/host/fleet-update/fleet-update-view.ts:1276` and pulls
+  // `operation.error?.message` at `:859` - so this text LEAVES THE MACHINE for
+  // every client whether or not any card renders it. "No GUI surface carries
+  // this text" is not "the text does not travel", and only the second would
+  // have been an argument for dropping the cap.
+  //
   // The sentence this replaces added that the text was RENDERED in the GUI.
   // That was TRUE when written - the generic failed card interpolated `Update
   // failed: <host's words>` verbatim - and the Q23 GUI patch invalidated it

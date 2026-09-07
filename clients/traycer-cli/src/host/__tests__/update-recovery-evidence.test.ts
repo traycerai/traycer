@@ -1109,9 +1109,15 @@ describe("observeAttemptRecoveryEvidence - the running leg's DIAGNOSIS (Linux E1
   it("Q19: the host's refusal text is CAPPED where it is minted", async () => {
     // Cold review B: this string is host-authored and unbounded, it is
     // interpolated into the verify failure's message, and that message is what
-    // `writer.fail` stores - which `host.status.operation.error` mirrors onto a
-    // rendered surface. So an unbounded value would sit beside a token whose
-    // whole contract is that it is a closed set of fixed strings.
+    // `writer.fail` stores - which `host.status.operation.error` mirrors over
+    // the WIRE. So an unbounded value would sit beside a token whose whole
+    // contract is that it is a closed set of fixed strings.
+    //
+    // The wire, not a card: as of Q23 the GUI's `verification-refused` card
+    // renders fixed copy and no surface renders this text for this code. The
+    // cap holds on the durable record alone, and the mint's docblock carries
+    // the full reasoning including what was checked and found ABSENT (no size
+    // bound in either decoder).
     //
     // Capped at the MINT rather than at any consumer, because the durable
     // record is the furthest-travelling consumer and capping one caller would

@@ -253,8 +253,23 @@ describe("encodeInstallGeneration call sites", () => {
     // nobody wrote down. Without it the two directional tests below only ever
     // read files the lists already name, so the register's headline claim -
     // that a NEW hand-built literal reddens - was false as first written.
+    const discovered = discoveredCallers();
+    // The scan's OWN failure mode, asserted rather than left to luck (cold
+    // review B; dc84fa8b's absence-vs-count shape). A scan that finds nothing
+    // returns `[]`, and `[]` fails the comparison below only because the
+    // union happens to be non-empty today - so the register would go red for
+    // an accidental reason and, if the lists ever emptied, for none at all.
+    //
+    // Precisely which path this covers, since the obvious one is already
+    // handled: `git grep -l` exits nonzero on no match and `execFileSync`
+    // throws, so a genuine zero-match is loud. What is NOT loud is a scan
+    // that succeeds and is then filtered to nothing - a moved encoder module,
+    // a renamed `__tests__`, a pathspec that stops matching. That returns an
+    // empty list through a green `git`, and this assertion is the only thing
+    // that can tell it from "the tree really has no callers".
+    expect(discovered.length).toBeGreaterThan(0);
     const known = [...MIGRATED_CALLERS, ...PENDING_LITERAL_CALLERS].sort();
-    expect(discoveredCallers()).toEqual(known);
+    expect(discovered).toEqual(known);
   });
 
   it("names every remaining hand-built literal, and no others", () => {
