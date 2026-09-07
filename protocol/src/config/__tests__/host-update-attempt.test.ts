@@ -377,4 +377,209 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
       expect(result.kind).toBe("valid");
     });
   });
+
+  // ---- verification (Q1): the first key that answers (c), not (b) ---------
+  //
+  // Its own describe, exactly as the header comment invites: `verification`
+  // splits the corrupt verdict where `recovery` and `claim` do not, so pinning
+  // it here rather than inside their block is what keeps their rule readable
+  // as theirs.
+  //
+  // The split IS the forward-compat contract for this key:
+  //
+  //   - a MALFORMED value corrupts, the same as (b). Nothing any writer can
+  //     emit produces those shapes, so they mean damage;
+  //   - a well-formed value naming an UNKNOWN `mode` drops the key and leaves
+  //     the record valid - case (c).
+  //
+  // Backwards, and the first `mode` anyone adds makes every record a newer
+  // build writes unreadable to every deployed older one: a diagnostic
+  // bricking the thing it was added to explain. A field that exists to
+  // describe a conclusion must never be able to invalidate it.
+  //
+  // The asymmetry costs one real check, and the malformed rows below are what
+  // buy it back: `mode` is validated against the KNOWN set rather than "is a
+  // string", so a genuinely damaged `mode` still corrupts rather than being
+  // waved through as somebody's future vocabulary.
+
+  describe("verification: recorded positively, and forward-compatible by DROPPING rather than corrupting", () => {
+    const IDENTITY = { mode: "identity" };
+    const VERSION_ONLY = {
+      mode: "version-only",
+      reason: "pid-start-stamp-missing",
+      floor: "1.1.11",
+    };
+
+    it("decodes the identity mode on a complete record", () => {
+      const result = decodeHostUpdateAttempt(
+        bytes(completeTerminalJson({ verification: IDENTITY })),
+      );
+      expect(result.kind).toBe("valid");
+      if (result.kind === "valid") {
+        expect(result.value.verification).toEqual(IDENTITY);
+      }
+    });
+
+    it("decodes the version-only mode, carrying the floor it was compared against verbatim", () => {
+      // The floor is recorded rather than re-derived, because the value that
+      // mattered is the one this run actually compared against - and that
+      // constant has moved twice already.
+      const result = decodeHostUpdateAttempt(
+        bytes(completeTerminalJson({ verification: VERSION_ONLY })),
+      );
+      expect(result.kind).toBe("valid");
+      if (result.kind === "valid") {
+        expect(result.value.verification).toEqual(VERSION_ONLY);
+      }
+    });
+
+    it("decodes on a FAILED record, not only a complete one - a failed below-floor install is exactly where someone looks", () => {
+      const result = decodeHostUpdateAttempt(
+        bytes(
+          completeTerminalJson({
+            phase: "failed",
+            verification: VERSION_ONLY,
+          }),
+        ),
+      );
+      expect(result.kind).toBe("valid");
+      if (result.kind === "valid") {
+        expect(result.value.verification).toEqual(VERSION_ONLY);
+      }
+    });
+
+    it("decodes on a SUPERSEDED record - terminal is all three phases, not just complete", () => {
+      const result = decodeHostUpdateAttempt(
+        bytes(
+          completeTerminalJson({
+            phase: "superseded",
+            verification: IDENTITY,
+          }),
+        ),
+      );
+      expect(result.kind).toBe("valid");
+      if (result.kind === "valid") {
+        expect(result.value.verification).toEqual(IDENTITY);
+      }
+    });
+
+    it("decodes with no verification key at all when it is omitted, never inventing one", () => {
+      // Absence is load-bearing in the OTHER direction for this key: a writer
+      // that predates it records nothing, and readers must not read that as
+      // "verified fully". The decoder's job is only to not fabricate a value.
+      const result = decodeHostUpdateAttempt(bytes(completeTerminalJson({})));
+      expect(result.kind).toBe("valid");
+      if (result.kind === "valid") {
+        expect("verification" in result.value).toBe(false);
+      }
+    });
+
+    // ---- case (b): malformed corrupts, one row per way to be malformed ----
+
+    it("reports corrupt when verification is not an object at all", () => {
+      expect(
+        decodeHostUpdateAttempt(
+          bytes(completeTerminalJson({ verification: "version-only" })),
+        ),
+      ).toEqual({ kind: "corrupt" });
+    });
+
+    it("reports corrupt when mode is present but is not a string", () => {
+      // The check the asymmetry costs: without validating `mode`'s TYPE, a
+      // damaged value would fall through to the unknown-mode arm and be
+      // silently dropped as a future vocabulary.
+      expect(
+        decodeHostUpdateAttempt(
+          bytes(completeTerminalJson({ verification: { mode: 7 } })),
+        ),
+      ).toEqual({ kind: "corrupt" });
+    });
+
+    it("reports corrupt when version-only carries a reason it could not have been written with", () => {
+      expect(
+        decodeHostUpdateAttempt(
+          bytes(
+            completeTerminalJson({
+              verification: { ...VERSION_ONLY, reason: "something-else" },
+            }),
+          ),
+        ),
+      ).toEqual({ kind: "corrupt" });
+    });
+
+    it("reports corrupt when version-only carries an empty floor, the value it exists to report", () => {
+      expect(
+        decodeHostUpdateAttempt(
+          bytes(
+            completeTerminalJson({
+              verification: { ...VERSION_ONLY, floor: "" },
+            }),
+          ),
+        ),
+      ).toEqual({ kind: "corrupt" });
+    });
+
+    // ---- case (c): the arm no other key here takes -------------------------
+
+    it("DROPS a well-formed verification naming a mode this build has never heard of, and keeps the record valid", () => {
+      const result = decodeHostUpdateAttempt(
+        bytes(
+          completeTerminalJson({
+            verification: { mode: "some-future-mode", whatever: true },
+            claim: VALID_CLAIM,
+          }),
+        ),
+      );
+      expect(result.kind).toBe("valid");
+      if (result.kind === "valid") {
+        // Dropped, not carried through as an unrecognized shape...
+        expect("verification" in result.value).toBe(false);
+        // ...and the REST of the record survives intact, which is the half
+        // that makes this tolerance worth anything: an older build reading a
+        // newer build's record still gets every field it does understand.
+        expect(result.value.claim).toEqual(VALID_CLAIM);
+        expect(result.value.phase).toBe("complete");
+      }
+    });
+
+    // ---- terminal-only, on recovery's reasoning rather than by analogy ----
+
+    it("reports corrupt when verification is attached to an ACTIVE record", () => {
+      // It reports how the verify leg CONCLUDED, so a partial or crashed
+      // writer must not be able to leave it on a live segment and make a
+      // running attempt look already verified - or, worse, verified weakly.
+      expect(
+        decodeHostUpdateAttempt(bytes(json({ verification: IDENTITY }))),
+      ).toEqual({ kind: "corrupt" });
+    });
+
+    it("reports corrupt when verification is attached to a PARKED record", () => {
+      expect(
+        decodeHostUpdateAttempt(
+          bytes(JSON.stringify({ ...VALID_PARKED, verification: IDENTITY })),
+        ),
+      ).toEqual({ kind: "corrupt" });
+    });
+
+    it("accepts claim and verification together on a terminal record, since only the phase gate is shared", () => {
+      // The pairing row, mirroring the claim/recovery one above: two additive
+      // keys with different phase rules must not interfere on a record where
+      // both are legal.
+      const result = decodeHostUpdateAttempt(
+        bytes(
+          completeTerminalJson({
+            claim: VALID_CLAIM,
+            recovery: VALID_COMPLETE_RECOVERY,
+            verification: VERSION_ONLY,
+          }),
+        ),
+      );
+      expect(result.kind).toBe("valid");
+      if (result.kind === "valid") {
+        expect(result.value.claim).toEqual(VALID_CLAIM);
+        expect(result.value.recovery).toEqual(VALID_COMPLETE_RECOVERY);
+        expect(result.value.verification).toEqual(VERSION_ONLY);
+      }
+    });
+  });
 });
