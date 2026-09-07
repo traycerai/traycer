@@ -553,12 +553,8 @@ export async function commitHostInstallSource(
       opts.verifyMutationCapability,
     );
 
-    const installGeneration = encodeInstallGeneration({
-      installId: record.installId,
-      installedAt: record.installedAt,
-      archiveSha256: record.archiveSha256,
-      version: record.version,
-    });
+    // The record itself; see `apply.ts` for why a literal is not equivalent.
+    const installGeneration = encodeInstallGeneration(record);
 
     logger.info("Host install commit completed", {
       environment: opts.environment,

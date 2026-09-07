@@ -344,12 +344,15 @@ export async function applyHost(
           postSwapAction: lifecycleHandle.state.postSwapAction,
         };
 
-  const installGeneration = encodeInstallGeneration({
-    installId: record.installId,
-    installedAt: record.installedAt,
-    archiveSha256: record.archiveSha256,
-    version: record.version,
-  });
+  // The RECORD, not a literal rebuilt from it (cold review B, F1). The
+  // fingerprint this returns is compared byte-for-byte against one another
+  // module computed - `host start`'s relaunch admission, the claim baseline a
+  // park records - so byte-identical construction is the whole contract, and a
+  // hand-built literal makes that contract a convention six sites have to keep
+  // remembering. `HostInstallRecord` satisfies `InstallGenerationIdentity`
+  // structurally, so a field added to one side can no longer be forgotten on
+  // the other.
+  const installGeneration = encodeInstallGeneration(record);
 
   logger.info("Host apply completed", {
     environment: opts.environment,

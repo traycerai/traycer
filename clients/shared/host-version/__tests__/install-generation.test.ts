@@ -1,5 +1,48 @@
+import { readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { encodeInstallGeneration } from "../install-generation";
+
+const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
+
+/**
+ * Every production caller of `encodeInstallGeneration`, and how it passes its
+ * argument.
+ *
+ * `migrated` sites hand the RECORD through whole. `pendingLiteral` sites still
+ * rebuild the four-field object by hand and are listed BY NAME with the change
+ * that owns them, so the list is a debt register rather than a blanket
+ * exemption: a site that appears here without being written down fails the pin,
+ * which is the case that matters - a NEW hand-built literal.
+ */
+const MIGRATED_CALLERS: readonly string[] = [
+  "clients/traycer-cli/src/installer/apply.ts",
+  "clients/traycer-cli/src/installer/install.ts",
+  "clients/traycer-cli/src/installer/download-stage.ts",
+];
+
+const PENDING_LITERAL_CALLERS: readonly string[] = [
+  // Owned by `bafc226ec` on the Q13/Q3/Q9 line, which migrates all four in one
+  // change. Deliberately NOT migrated here: both branches edit these files, and
+  // duplicating the same edit buys a merge conflict for no behaviour. Delete
+  // these entries when that change lands and the pin tightens by itself.
+  "clients/traycer-cli/src/host/provision.ts",
+  "clients/traycer-cli/src/host/attested-install-runtime.ts",
+  "clients/traycer-cli/src/host/stamp-runtime.ts",
+  "clients/traycer-cli/src/host/update-run.ts",
+  // Desktop main's own capture, out of this package's scope.
+  "clients/desktop/src/electron-main/host/host-state.ts",
+];
+
+function sourceOf(repoRelativePath: string): string {
+  return readFileSync(join(REPO_ROOT, repoRelativePath), "utf8");
+}
+
+/**
+ * The literal shape this pin exists to keep out: an inline object rebuilding
+ * the identity field by field at the call site.
+ */
+const HAND_BUILT_LITERAL = /encodeInstallGeneration\(\s*\{/;
 
 describe("encodeInstallGeneration", () => {
   it("uses the installId when present, ignoring the legacy fields entirely", () => {
@@ -82,5 +125,49 @@ describe("encodeInstallGeneration", () => {
       version: "1.0.0",
     });
     expect(legacy).not.toBe(minted);
+  });
+});
+
+/**
+ * The construction rule, pinned at SOURCE level (cold review B, F1).
+ *
+ * `encodeInstallGeneration`'s output is compared byte-for-byte across modules
+ * that never see each other's code: the claim baseline a park records, the
+ * value `host start`'s relaunch admission recomputes under the attempt lock,
+ * the CAS in `host stamp-runtime`. Byte-identical construction is therefore the
+ * whole contract, and a per-site field mapping makes that contract a convention
+ * every future caller has to remember - one that drifts silently, because a
+ * forgotten field produces a perfectly valid string that simply never matches.
+ *
+ * The unit tests above cannot see this: they pass whatever they are handed. The
+ * defect lives in the CALL SITES, so the pin has to read them.
+ */
+describe("encodeInstallGeneration call sites", () => {
+  it.each(MIGRATED_CALLERS)("%s passes the record, not a literal", (path) => {
+    const source = sourceOf(path);
+    expect(source).toContain("encodeInstallGeneration(");
+    expect(source).not.toMatch(HAND_BUILT_LITERAL);
+  });
+
+  it("names every remaining hand-built literal, and no others", () => {
+    // Discovered, not assumed: the scan is over the union of both lists, so a
+    // site that drops its literal without leaving `PENDING_LITERAL_CALLERS`
+    // reddens too - the register cannot rot in the quiet direction either.
+    const stillLiteral = [...MIGRATED_CALLERS, ...PENDING_LITERAL_CALLERS]
+      .filter((path) => HAND_BUILT_LITERAL.test(sourceOf(path)))
+      .sort();
+    expect(stillLiteral).toEqual([...PENDING_LITERAL_CALLERS].sort());
+  });
+
+  it("every migrated site is inside a package this pin is allowed to read", () => {
+    // A guard on the guard: `REPO_ROOT` is computed by climbing four levels
+    // from this file, so a move of the test would silently start reading some
+    // other tree - and `readFileSync` on a path that resolves outside the repo
+    // would throw here rather than pass vacuously.
+    for (const path of [...MIGRATED_CALLERS, ...PENDING_LITERAL_CALLERS]) {
+      const resolved = join(REPO_ROOT, path);
+      expect(relative(REPO_ROOT, resolved)).toBe(path);
+      expect(() => readFileSync(resolved, "utf8")).not.toThrow();
+    }
   });
 });

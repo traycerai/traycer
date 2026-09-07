@@ -1008,12 +1008,8 @@ export async function resolveUpdatePlan(
   const staged = await readHostStagedRecord(opts.environment);
   const identity: HostUpdatePlanIdentity = {
     installedVersion: installed.version,
-    installGeneration: encodeInstallGeneration({
-      installId: installed.installId,
-      installedAt: installed.installedAt,
-      archiveSha256: installed.archiveSha256,
-      version: installed.version,
-    }),
+    // The record itself; see `apply.ts` for why a literal is not equivalent.
+    installGeneration: encodeInstallGeneration(installed),
     installedRuntimeVersion: installed.runtimeVersion,
     stagedVersion: staged?.version ?? null,
     stageFingerprint: staged?.stageId ?? null,
