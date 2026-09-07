@@ -132,45 +132,75 @@ export const LOCK_AWARE_CLI_FLOOR: string = FIRST_LOCK_AWARE_RELEASE;
 export const LOCK_AWARE_DESKTOP_FLOOR: string = FIRST_LOCK_AWARE_RELEASE;
 
 /**
- * Minimum HOST version whose `pid.json` carries `processStartIdentity`, read
- * by Ticket 07's verify-leg fallback (Q1).
+ * Minimum HOST version whose `pid.json` carries a usable
+ * `processStartIdentity`, read by Ticket 07's verify-leg fallback (Q1).
  *
- * A third NAME rather than a reuse of `LOCK_AWARE_CLI_FLOOR`: that floor is
- * about a CLI, this is about the host BINARY, and the host ships from a
- * different repository. A reader who met `LOCK_AWARE_CLI_FLOOR` inside a
- * verify leg comparing a host version would reasonably think it a bug.
+ * ## It is NOT `FIRST_LOCK_AWARE_RELEASE`, and that is the point of the name
  *
- * ## ⚠️ THE VALUE IS HELD — this number is not yet derived
+ * The first derivation of this constant took the lock module's presence at
+ * each tag and landed on `1.3.0-rc.1`. That floors LOCK-AWARENESS — a
+ * different property, of a different code path, in a different repository —
+ * and the coincidence of a plausible number with wrong reasoning is worse
+ * than a wrong number, because the next person re-deriving inherits it. The
+ * real floor is **two minor lines lower**, so a fence that had reused the CLI
+ * floor here would have forced version-only verification on every 1.1.9
+ * through 1.3.0 host that could in fact prove its identity.
  *
- * It currently equals `FIRST_LOCK_AWARE_RELEASE` because it was first derived
- * from the lock module's presence at each tag. That floors LOCK-AWARENESS, a
- * different property of a different code path, and the coincidence of a
- * plausible number with wrong reasoning is worse than a wrong number: the next
- * person re-deriving inherits the error.
+ * ## Derivation (Q14)
  *
- * What is actually known here (the host's writer is not in this repository):
- * the three `format*ProcessStartIdentity` functions first exist at
- * `host-v1.1.9`, and **Linux has a failure mode the other platforms do not**,
- * from that same tag — `formatLinuxProcessStartIdentity` has always required a
- * boot id (`/proc/sys/kernel/random/boot_id`) and returns `null` for an
- * unreadable one, where macOS needs only `ps -o lstart=`.
+ * The WRITER's history, not the reader's verdict:
  *
- * That matters beyond the number. The Linux lane saw 1.2.0 refused
- * `pid-start-stamp-missing` even though the formatter is byte-identical at
- * 1.1.9 and 1.2.0, so either the host's writer lagged on Linux (a version
- * story, floor in `(1.2.0, 1.3.0-rc.1]`) or the boot id is unreadable in that
- * environment — in which case **no floor value fixes it**, because a host
- * there never writes a stamp at any version and a target-version gate never
- * takes the degraded arm for it.
+ *  - the three `format*ProcessStartIdentity` functions first exist at
+ *    `host-v1.1.9` — `protocol/src/host/lifecycle/process-start-identity.ts`
+ *    is absent at `host-v1.1.8` — matching internal #4655 (2026-07-28) in
+ *    `pid-metadata.ts` / `layer0-lock.ts`;
+ *  - raw `pid.json` readings on BOTH platforms: 1.1.11 (raw), 1.2.0
+ *    (projection) and 1.3.0-rc.3 (production raw) all carry the field;
+ *    1.0.0, 1.1.5 and 1.1.8 do not. The boundary brackets `host-v1.1.9`
+ *    exactly.
  *
- * Err HIGH while it is unresolved: too high only degrades a stamped target to
- * version-only verification and records that it did; too low reproduces Q1 as
- * a hard failure on every rollback into the band. If macOS and Linux differ,
- * this must become the max across platforms or platform-aware — and it should
- * not keep a name implying otherwise. Derivation and the deciding readings:
- * the plan's release checklist.
+ * **No platform split.** Linux was the candidate for one —
+ * `formatLinuxProcessStartIdentity` has required a boot id
+ * (`/proc/sys/kernel/random/boot_id`) since 1.1.9 and returns `null` for an
+ * unreadable one, where macOS needs only `ps -o lstart=` — but the readings
+ * agree across both, so one constant is honest here. If that ever stops being
+ * true this must become the max across platforms or platform-aware, because
+ * the identity is platform-TAGGED and "does this version write a usable
+ * stamp" is a per-platform question by construction.
+ *
+ * ## Read RAW bytes when re-deriving, never the reader's verdict
+ *
+ * `isProcessStartIdentity` rejects an untagged token, an unknown platform tag
+ * and an empty payload, and the pid-metadata decoder maps every rejection to
+ * `null` — the same value absence produces. So three states collapse into one
+ * at the reader: key absent, key present but rejected, key present and valid.
+ * The floor is the first release where the THIRD holds; deriving from the
+ * reader's `null` puts it too LOW wherever the middle state exists. (Reviewer
+ * C, Q8 review.)
+ *
+ * ## Error direction
+ *
+ * Too HIGH only degrades an already-stamped target to version-only
+ * verification, and the record says it did. Too LOW reproduces Q1 as a hard
+ * failure on every rollback into the band. **Err high.**
+ *
+ * `1.1.9` is the writer's first tag. The rows for 1.1.9 and 1.1.10 are still
+ * running; until they land, the PROVEN-present floor is `1.1.11`, and
+ * `HOST_START_STAMP_PROVEN_FLOOR` below is the err-high fallback to switch to
+ * if those rows surprise us. One line to flip, deliberately.
  */
-export const HOST_START_STAMP_FLOOR: string = FIRST_LOCK_AWARE_RELEASE;
+export const HOST_START_STAMP_FLOOR: string = "1.1.9";
+
+/**
+ * The lowest host version whose stamp has been OBSERVED in a raw `pid.json`,
+ * as opposed to inferred from the writer's source history.
+ *
+ * Not consumed today. It exists so the err-high fallback is a named value with
+ * its evidence attached rather than a number someone has to re-derive under
+ * time pressure: if the 1.1.9/1.1.10 rows come back unstamped, point
+ * `HOST_START_STAMP_FLOOR` at this instead.
+ */
+export const HOST_START_STAMP_PROVEN_FLOOR = "1.1.11";
 
 export interface CompatibilityFloors {
   readonly cli: string;

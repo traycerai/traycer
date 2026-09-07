@@ -1,8 +1,12 @@
+import { execFile } from "node:child_process";
+import { resolve } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   COMPATIBILITY_FLOOR_UNPINNED,
   FIRST_LOCK_AWARE_RELEASE,
   HOST_START_STAMP_FLOOR,
+  HOST_START_STAMP_PROVEN_FLOOR,
   LOCK_AWARE_CLI_FLOOR,
   LOCK_AWARE_DESKTOP_FLOOR,
   SHIPPED_COMPATIBILITY_FLOORS,
@@ -15,6 +19,7 @@ import {
   LOCAL_BUILD_VERSION,
   nonReleaseIdentityKind,
 } from "../../host-version/non-release-identity";
+import { compareHostVersions } from "../../host-version/compare-host-versions";
 
 // Direct unit suite for Ticket 07's compatibility fence.
 
@@ -30,12 +35,56 @@ describe("compatibility fence — the SHIPPED floors", () => {
     // number lives, which is the thing this shape exists to prevent.
     expect(LOCK_AWARE_CLI_FLOOR).toBe(FIRST_LOCK_AWARE_RELEASE);
     expect(LOCK_AWARE_DESKTOP_FLOOR).toBe(FIRST_LOCK_AWARE_RELEASE);
-    expect(HOST_START_STAMP_FLOOR).toBe(FIRST_LOCK_AWARE_RELEASE);
     expect(FIRST_LOCK_AWARE_RELEASE).not.toBe(COMPATIBILITY_FLOOR_UNPINNED);
     expect(SHIPPED_COMPATIBILITY_FLOORS).toEqual({
       cli: FIRST_LOCK_AWARE_RELEASE,
       desktop: FIRST_LOCK_AWARE_RELEASE,
     });
+  });
+
+  it("the host STAMP floor is NOT the lock floor, and is strictly lower", () => {
+    // The whole reason this is a third name rather than a reuse. The two
+    // floor different properties in different repositories, and the evidence
+    // (Q14) put them two minor lines apart: the writer that stamps `pid.json`
+    // landed at host-v1.1.9, lock-awareness at 1.3.0-rc.1. A fence that had
+    // reused the CLI floor here would force version-only verification on
+    // every 1.1.9 - 1.3.0 host that could in fact prove its identity.
+    expect(HOST_START_STAMP_FLOOR).not.toBe(FIRST_LOCK_AWARE_RELEASE);
+    expect(
+      compareHostVersions(HOST_START_STAMP_FLOOR, FIRST_LOCK_AWARE_RELEASE),
+    ).toEqual({ comparable: true, ordering: "less" });
+  });
+
+  it.each([
+    // The readings the floor is derived from, as an ordering matrix. These are
+    // raw `pid.json` observations on BOTH platforms, not the reader's verdict.
+    ["1.0.0", "less"],
+    ["1.1.5", "less"],
+    ["1.1.8", "less"],
+    ["1.1.11", "greater"],
+    ["1.2.0", "greater"],
+    ["1.3.0-rc.3", "greater"],
+  ] as const)(
+    "orders the observed host %s against the stamp floor as %s",
+    (version, ordering) => {
+      expect(compareHostVersions(version, HOST_START_STAMP_FLOOR)).toEqual({
+        comparable: true,
+        ordering,
+      });
+    },
+  );
+
+  it("the err-high fallback is a real version ABOVE the shipped stamp floor", () => {
+    // If the 1.1.9/1.1.10 rows come back unstamped, the floor moves to this.
+    // Pinned as strictly greater so the fallback can only ever tighten - a
+    // fallback that sat below the shipped floor would loosen on the one path
+    // that must not loosen.
+    expect(
+      compareHostVersions(
+        HOST_START_STAMP_PROVEN_FLOOR,
+        HOST_START_STAMP_FLOOR,
+      ),
+    ).toEqual({ comparable: true, ordering: "greater" });
   });
 
   it("admits a machine at the shipped floors rather than refusing floor-unpinned", () => {
@@ -127,6 +176,18 @@ describe("compatibility fence — the SHIPPED floors", () => {
 describe("compatibility fence — non-release build identities", () => {
   const LOCAL_INSTALL = "local-traycer-host.tar.gz-2026-09-07T19-30-00-000Z";
   const STAGING = "staging.1783550586518.bb8c937d9";
+
+  // REAL identities this round produced, not invented ones. The authority for
+  // this shape is the staging build pipeline, which is outside this repository
+  // - so a drift there would refuse every staging build with nothing here
+  // reddening, and the fence's own matrix runs on staging builds. Pinning
+  // strings the pipeline actually emitted moves that failure into this suite.
+  // Supplied by reviewer C from the final-round Mac staging slot and the Q7
+  // patch's unorderable-install fixture.
+  const REAL_STAGING_IDENTITIES = [
+    "staging.1788780730120.1d4be2fe71",
+    "staging.1788716277681.312db41da0",
+  ] as const;
 
   it.each([
     // TWO BRANCHES, not one, and this is the whole finding. A rule that only
@@ -244,6 +305,24 @@ describe("compatibility fence — non-release build identities", () => {
     ).toEqual({ kind: "refuse", reason: "cli-below-floor" });
     expect(nonReleaseIdentityKind("0.0.0-locale")).toBeNull();
   });
+
+  it.each(REAL_STAGING_IDENTITIES)(
+    "recognises the real staging identity %s the pipeline actually emitted",
+    (identity) => {
+      expect(nonReleaseIdentityKind(identity)).toBe("staging-build");
+      expect(
+        decideCompatibilityFence(
+          { installedCliVersion: null, desktopVersion: identity },
+          SHIPPED_COMPATIBILITY_FLOORS,
+        ),
+      ).toEqual({
+        kind: "admit",
+        waived: [
+          { actor: "desktop", version: identity, identity: "staging-build" },
+        ],
+      });
+    },
+  );
 
   it("the local-build waiver names the SAME string evaluateHostClientFloor exempts", () => {
     // `evaluateHostClientFloor` exempts `LOCAL_CLI_VERSION` BY NAME so the
@@ -448,5 +527,47 @@ describe("cohort policy (O4) — failure degrades TO the fence, never through it
       enabled: true,
       source: "static-default",
     });
+  });
+});
+
+describe("compatibility fence — the call-site contract", () => {
+  // The cutover's HARD CONSTRAINT is that the fence must not refuse the
+  // upgrade path itself: the E8v rows are pre-cutover CLIs updating to the
+  // flipped release, on machines with no Desktop. That holds by CONSTRUCTION
+  // rather than by any verdict - those machines never reach the fence, because
+  // its only production call site is Desktop's activation admission.
+  //
+  // Which makes the constraint rest on a structural claim that nothing pinned:
+  // add a CLI-side call site and the hard constraint breaks with every fence
+  // test still green. This matches the call-site LIST, not a count, so a
+  // replacement fails too. (Reviewer C, Q8 review, mirroring the GUI side's
+  // `LocalUpdateClock` contract test.)
+  const ALLOWED_CALL_SITES = [
+    "clients/desktop/src/electron-main/host/update-executor.ts",
+  ] as const;
+
+  it("decideCompatibilityFence is called from Desktop's admission and nowhere else in production", async () => {
+    const repoRoot = resolve(__dirname, "../../../..");
+    const { stdout } = await promisify(execFile)(
+      "git",
+      ["grep", "-l", "decideCompatibilityFence(", "--", "clients", "protocol"],
+      { cwd: repoRoot },
+    );
+
+    const callSites = stdout
+      .split("\n")
+      .filter((line) => line.length > 0)
+      // The definition, the barrel that re-exports it, and test files are not
+      // call sites. Everything else is.
+      .filter(
+        (file) =>
+          !file.endsWith("host-update/compatibility-fence.ts") &&
+          !file.endsWith("host-update/index.ts") &&
+          !file.includes("__tests__/") &&
+          !file.endsWith(".test.ts"),
+      )
+      .sort();
+
+    expect(callSites).toEqual([...ALLOWED_CALL_SITES]);
   });
 });
