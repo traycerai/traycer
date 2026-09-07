@@ -2375,6 +2375,31 @@ describe("ported: buildHostUpdateCommand composite", () => {
     expect(mocks.writes.length).toBeGreaterThan(0);
   });
 
+  it("Q12: the downgrade arm records the generation ITS swap wrote, not the one it replaced", async () => {
+    // The downgrade arm is the second of the two arms that actually swap, and
+    // it was the one Q12 left unwatched. Found by ablating each `restarting`
+    // writer INDIVIDUALLY rather than all three together: nulling this site
+    // alone left the whole 163-test suite green, so two thirds of the change
+    // had no pin behind it.
+    //
+    // Downgrade is the sharpest case for the property, because here the two
+    // versions cannot be confused for one another by accident. The claim is
+    // taken against 2.0.0, the swap installs 1.0.0, and the baseline must end
+    // up describing what the swap wrote. Before Q12 it kept saying 2.0.0 - an
+    // account of the install this attempt had just deleted.
+    await seedInstalled("2.0.0");
+    world.runningVersion = "2.0.0";
+
+    await runUpdate({ versionRequest: "1.0.0", allowDowngrade: true });
+
+    const record = await requireRecord();
+    expect(record.claim).toMatchObject({ installedVersion: "1.0.0" });
+    // Consent is COPIED across a refresh, never restated from it - the
+    // refresh shape cannot even carry `allowDowngrade`. A downgrade whose
+    // record came back without consent would be a park nothing could resume.
+    expect(record.claim).toMatchObject({ allowDowngrade: true });
+  });
+
   it("REFUSES an explicit lower target without consent, and takes the owned installer with it", async () => {
     // This pin used to read "keeps an explicit lower target on the monotonic
     // stage path" and assert a `nothing-to-do` release - exit 0 for a request

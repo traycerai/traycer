@@ -2426,10 +2426,17 @@ async function activationArm(
         // around this call (#1752 round 8).
         () => input.mirror.markDisturbed(),
       );
-      await writer.phaseWrite(
-        "restarting",
-        await generationWrittenBySwap(input.args.environment),
-      );
+      // CARRY, not refresh - this arm places no bytes.
+      //
+      // The activation arm stops the host and relaunches it onto an install
+      // an EARLIER segment already placed, so there is no swap here whose
+      // generation could be recorded and `generationWrittenBySwap` would be
+      // a lie about where the value came from. The baseline is already
+      // correct: both births of an `activate` continuation refresh it - the
+      // busy park through `parkForActivation`, and the recovery resume
+      // through its own park - so carrying is what preserves that work
+      // rather than re-reading the same record to restate it.
+      await writer.phaseWrite("restarting", null);
       await relaunchHostAfterRestartWithAttempt(
         input.capability,
         contenderOptions,
